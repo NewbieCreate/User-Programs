@@ -33,24 +33,30 @@ process_init (void) {
 	struct thread *current = thread_current ();
 }
 
-/* Starts the first userland program, called "initd", loaded from FILE_NAME.
- * The new thread may be scheduled (and may even exit)
- * before process_create_initd() returns. Returns the initd's
- * thread id, or TID_ERROR if the thread cannot be created.
- * Notice that THIS SHOULD BE CALLED ONCE. */
+/* FILE_NAME에서 "initd"라는 첫 번째 유저 프로그램을 로드하여 시작합니다.
+	이 함수가 반환되기 전에 새로 생성된 스레드가 스케줄되거나 종료될 수 있습니다.
+	성공 시 "initd"의 스레드 ID를 반환하고, 실패 시 TID_ERROR를 반환합니다.
+	주의: 이 함수는 반드시 한 번만 호출해야 합니다. */
 tid_t
 process_create_initd (const char *file_name) {
 	char *fn_copy;
 	tid_t tid;
 
-	/* Make a copy of FILE_NAME.
-	 * Otherwise there's a race between the caller and load(). */
+	/* file_name의 사본을 만듭니다.
+	 * 그렇지 않으면 호출자와 load() 사이에 race가 발생합니다. */
 	fn_copy = palloc_get_page (0);
 	if (fn_copy == NULL)
 		return TID_ERROR;
 	strlcpy (fn_copy, file_name, PGSIZE);
 
-	/* Create a new thread to execute FILE_NAME. */
+	/* Project2: for Test Case - 직접 프로그램을 실행할 때에는 이 함수를 사용하지 않지만 make check에서
+       이 함수를 통해 process_create를 실행하기 때문에 이 부분을 수정해주지 않으면 Test Case의 Thread_name이
+       커맨드 라인 전체로 바뀌게 되어 Pass할 수 없다.
+    */
+	char *ptr;
+	strtok_t(file_name, " ", &ptr);
+
+	/* file_name을 실행할 새 스레드를 만듭니다. */
 	tid = thread_create (file_name, PRI_DEFAULT, initd, fn_copy);
 	if (tid == TID_ERROR)
 		palloc_free_page (fn_copy);
@@ -233,6 +239,8 @@ process_exec (void *f_name) {
 	palloc_free_page (file_name);
 	if (!success)
 		return -1;
+	
+	hex_dump(_if.rsp, _if.rsp, USER_STACK - _if.rsp, true); // 0x47480000
 	
 	/* 교환된 프로세스를 시작합니다. */
 	do_iret (&_if);
