@@ -165,98 +165,89 @@ error:
  * Returns -1 on fail. */
 int
 process_exec (void *f_name) {
-	char *file_name = f_name;
-	bool success;
+    char *file_name = f_name;
+    bool success;
 
-	/* We cannot use the intr_frame in the thread structure.
-	 * This is because when current thread rescheduled,
-	 * it stores the execution information to the member. */
-	struct intr_frame _if;
-	_if.ds = _if.es = _if.ss = SEL_UDSEG;
-	_if.cs = SEL_UCSEG;
-	_if.eflags = FLAG_IF | FLAG_MBS;
+    struct intr_frame _if;
+    _if.ds = _if.es = _if.ss = SEL_UDSEG;
+    _if.cs = SEL_UCSEG;
+    _if.eflags = FLAG_IF | FLAG_MBS;
 
-	/* We first kill the current context */
-	process_cleanup ();
+    /* We first kill the current context */
+    process_cleanup ();
 
-	/* 인자 파싱을 위한 복사본 생성 */
-	char *fn_copy = palloc_get_page(0);
-	if (fn_copy == NULL)
-		return -1;
-	strlcpy(fn_copy, file_name, PGSIZE);
+    /* === 개선된 부분 시작 === */
 
-	/* 프로그램 이름 추출 */
-	char *save_ptr;
-	char *prog_name = strtok_r(fn_copy, " ", &save_ptr);
+    // 1. 인자 파싱을 한 번만 수행
+    char *fn_copy = palloc_get_page(0);
+    if (fn_copy == NULL)
+        return -1;
+    strlcpy(fn_copy, file_name, PGSIZE);
 
-	/* And then load the binary */
-	success = load (prog_name, &_if);
+    char *argv[128];
+    int argc = 0;
+    char *token, *save_ptr;
 
-	/* If load failed, quit. */
-	if (!success) {
-		palloc_free_page(fn_copy);
-		palloc_free_page(file_name);
-		return -1;
-	}
+    for (token = strtok_r(fn_copy, " ", &save_ptr);
+         token != NULL;
+         token = strtok_r(NULL, " ", &save_ptr)) {
+        argv[argc++] = token;
+    }
 
-	/* 인자 파싱 */
-	char *argv[128];
-	int argc = 0;
-	
-	/* file_name을 다시 파싱 */
-	strlcpy(fn_copy, file_name, PGSIZE);
-	char *token;
-	char *save_ptr2;
-	
-	for (token = strtok_r(fn_copy, " ", &save_ptr2); 
-	     token != NULL; 
-	     token = strtok_r(NULL, " ", &save_ptr2)) {
-		argv[argc++] = token;
-	}
+    // 2. 파싱 결과(argv[0])를 이용해 바이너리 로드
+    success = load(argv[0], &_if);
 
-	/* 스택 설정 */
-	uintptr_t rsp = _if.rsp;
-	
-	/* 1. 문자열들을 스택에 복사 (오른쪽에서 왼쪽으로) */
-	for (int i = argc - 1; i >= 0; i--) {
-		size_t len = strlen(argv[i]) + 1;
-		rsp -= len;
-		memcpy((void *)rsp, argv[i], len);
-		argv[i] = (char *)rsp;
-	}
+    if (!success) {
+        palloc_free_page(fn_copy);
+        // file_name은 process_create_initd에서 할당되었으므로 여기서 해제
+        // thread_create의 aux로 전달되었으므로 thread_exit에서 해제하는게 더 안전할 수 있음
+        // Pintos 기본 구조에서는 initd의 f_name은 caller가 해제하지 않음
+        // 하지만 process_exec으로 넘어온 f_name은 process_create_initd에서 할당한 것.
+        // 실패 시 여기서 해제하는 것이 맞음.
+        palloc_free_page(file_name); 
+        return -1;
+    }
+    
+    /* === 개선된 부분 끝 === */
 
-	/* 2. 8바이트 정렬 */
-	rsp = rsp & ~7;
 
-	/* 3. NULL 포인터 추가 (argv[argc]) */
-	rsp -= sizeof(char *);
-	*(char **)rsp = NULL;
+    /* 3. 이미 파싱된 argv를 이용해 스택 설정 (이 부분은 기존과 동일) */
+    uintptr_t rsp = _if.rsp;
 
-	/* 4. argv 배열 (오른쪽에서 왼쪽으로) */
-	for (int i = argc - 1; i >= 0; i--) {
-		rsp -= sizeof(char *);
-		*(char **)rsp = argv[i];
-	}
-	
-	/* argv의 시작 주소 저장 */
-	char **argv_start = (char **)rsp;
+    for (int i = argc - 1; i >= 0; i--) {
+        size_t len = strlen(argv[i]) + 1;
+        rsp -= len;
+        memcpy((void *)rsp, argv[i], len);
+        argv[i] = (char *)rsp;
+    }
 
-	/* 5. return address */
-	rsp -= sizeof(void *);
-	*(void **)rsp = NULL;
+    rsp = rsp & ~7; 
 
-	/* 6. 레지스터 설정 */
-	_if.rsp = rsp;
-	_if.R.rdi = argc;
-	_if.R.rsi = (uintptr_t)argv_start;
+    rsp -= sizeof(char *);
+    *(char **)rsp = NULL;
 
-	/* 메모리 정리 */
-	palloc_free_page(fn_copy);
-	palloc_free_page(file_name);
+    for (int i = argc - 1; i >= 0; i--) {
+        rsp -= sizeof(char *);
+        *(char **)rsp = argv[i];
+    }
+    
+    char **argv_start = (char **)rsp;
 
-	/* Start switched process. */
-	do_iret (&_if);
-	NOT_REACHED ();
+    rsp -= sizeof(void *);
+    *(void **)rsp = NULL;
+
+    _if.rsp = rsp;
+    _if.R.rdi = argc;
+    _if.R.rsi = (uintptr_t)argv_start;
+
+    /* 메모리 정리 */
+    palloc_free_page(fn_copy);
+    // 성공 시 file_name은 더 이상 필요 없으므로 해제
+    palloc_free_page(file_name);
+
+    /* Start switched process. */
+    do_iret (&_if);
+    NOT_REACHED ();
 }
 
 /* Waits for thread TID to die and returns its exit status.  If
