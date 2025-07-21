@@ -160,6 +160,9 @@ error:
 
 /* Switch the current execution context to the f_name.
  * Returns -1 on fail. */
+
+/* Switch the current execution context to the f_name.
+ * Returns -1 on fail. */
 int
 process_exec (void *f_name) {
 	char *file_name = f_name;
@@ -176,19 +179,85 @@ process_exec (void *f_name) {
 	/* We first kill the current context */
 	process_cleanup ();
 
+	/* 인자 파싱을 위한 복사본 생성 */
+	char *fn_copy = palloc_get_page(0);
+	if (fn_copy == NULL)
+		return -1;
+	strlcpy(fn_copy, file_name, PGSIZE);
+
+	/* 프로그램 이름 추출 */
+	char *save_ptr;
+	char *prog_name = strtok_r(fn_copy, " ", &save_ptr);
+
 	/* And then load the binary */
-	success = load (file_name, &_if);
+	success = load (prog_name, &_if);
 
 	/* If load failed, quit. */
-	palloc_free_page (file_name);
-	if (!success)
+	if (!success) {
+		palloc_free_page(fn_copy);
+		palloc_free_page(file_name);
 		return -1;
+	}
+
+	/* 인자 파싱 */
+	char *argv[128];
+	int argc = 0;
+	
+	/* file_name을 다시 파싱 */
+	strlcpy(fn_copy, file_name, PGSIZE);
+	char *token;
+	char *save_ptr2;
+	
+	for (token = strtok_r(fn_copy, " ", &save_ptr2); 
+	     token != NULL; 
+	     token = strtok_r(NULL, " ", &save_ptr2)) {
+		argv[argc++] = token;
+	}
+
+	/* 스택 설정 */
+	uintptr_t rsp = _if.rsp;
+	
+	/* 1. 문자열들을 스택에 복사 (오른쪽에서 왼쪽으로) */
+	for (int i = argc - 1; i >= 0; i--) {
+		size_t len = strlen(argv[i]) + 1;
+		rsp -= len;
+		memcpy((void *)rsp, argv[i], len);
+		argv[i] = (char *)rsp;
+	}
+
+	/* 2. 8바이트 정렬 */
+	rsp = rsp & ~7;
+
+	/* 3. NULL 포인터 추가 (argv[argc]) */
+	rsp -= sizeof(char *);
+	*(char **)rsp = NULL;
+
+	/* 4. argv 배열 (오른쪽에서 왼쪽으로) */
+	for (int i = argc - 1; i >= 0; i--) {
+		rsp -= sizeof(char *);
+		*(char **)rsp = argv[i];
+	}
+	
+	/* argv의 시작 주소 저장 */
+	char **argv_start = (char **)rsp;
+
+	/* 5. return address */
+	rsp -= sizeof(void *);
+	*(void **)rsp = NULL;
+
+	/* 6. 레지스터 설정 */
+	_if.rsp = rsp;
+	_if.R.rdi = argc;
+	_if.R.rsi = (uintptr_t)argv_start;
+
+	/* 메모리 정리 */
+	palloc_free_page(fn_copy);
+	palloc_free_page(file_name);
 
 	/* Start switched process. */
 	do_iret (&_if);
 	NOT_REACHED ();
 }
-
 
 /* Waits for thread TID to die and returns its exit status.  If
  * it was terminated by the kernel (i.e. killed due to an
@@ -199,11 +268,20 @@ process_exec (void *f_name) {
  *
  * This function will be implemented in problem 2-2.  For now, it
  * does nothing. */
+// int
+// process_wait (tid_t child_tid UNUSED) {
+// 	/* XXX: Hint) The pintos exit if process_wait (initd), we recommend you
+// 	 * XXX:       to add infinite loop here before
+// 	 * XXX:       implementing the process_wait. */
+// 	return -1;
+// }
+
 int
 process_wait (tid_t child_tid UNUSED) {
-	/* XXX: Hint) The pintos exit if process_wait (initd), we recommend you
-	 * XXX:       to add infinite loop here before
-	 * XXX:       implementing the process_wait. */
+	/* 임시로 무한 루프 추가 */
+	while (1) {
+		thread_yield();
+	}
 	return -1;
 }
 

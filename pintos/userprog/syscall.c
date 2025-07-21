@@ -40,7 +40,34 @@ syscall_init (void) {
 /* The main system call interface */
 void
 syscall_handler (struct intr_frame *f UNUSED) {
-	// TODO: Your implementation goes here.
-	printf ("system call!\n");
-	thread_exit ();
+	switch (f->R.rax) {
+		case SYS_EXIT:
+			{
+				int status = (int)f->R.rdi;
+				// exit status 출력 - 이것이 중요!
+				printf("%s: exit(%d)\n", thread_current()->name, status);
+				thread_exit();
+			}
+			break;
+			
+		case SYS_WRITE:
+			{
+				int fd = (int)f->R.rdi;
+				const void *buffer = (const void *)f->R.rsi;
+				unsigned size = (unsigned)f->R.rdx;
+				
+				if (fd == 1) {  // stdout
+					putbuf(buffer, size);
+					f->R.rax = size;  // 쓴 바이트 수 반환
+				} else {
+					f->R.rax = -1;
+				}
+			}
+			break;
+			
+		default:
+			printf("Unimplemented system call: %lld\n", f->R.rax);
+			thread_exit();
+			break;
+	}
 }
