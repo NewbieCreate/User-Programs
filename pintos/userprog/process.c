@@ -54,7 +54,7 @@ process_create_initd (const char *file_name) {
        커맨드 라인 전체로 바뀌게 되어 Pass할 수 없다.
     */
 	char *ptr;
-	strtok_t(file_name, " ", &ptr);
+	strtok_r(file_name, " ", &ptr);
 
 	/* file_name을 실행할 새 스레드를 만듭니다. */
 	tid = thread_create (file_name, PRI_DEFAULT, initd, fn_copy);
@@ -171,7 +171,7 @@ void argument_stack(char **argv, int argc, struct intr_frame *if_){
 
 	// 인자들을 스택에 역순으로 push
 	for(int i = argc -1; i >=0; i--){
-		argv_len = strlen(argv[i]) + 1
+		argv_len = strlen(argv[i]) + 1;
 		if_ -> rsp -= argv_len;
 		memcpy(if_->rsp, argv[i], argv_len);
 		arg_addr[i] = if_ -> rsp;
@@ -190,7 +190,7 @@ void argument_stack(char **argv, int argc, struct intr_frame *if_){
 	// 인자들의 주소를 스택에 역순으로 PUSH
 	for(int i = argc - 1; i >= 0; i--){
 		if_ -> rsp -= 8;
-		memcpy(if_rsp, &arg_addr[i], sizeof(char *));
+		memcpy(if_->rsp, &arg_addr[i], sizeof(char *));
 	}
 
 	// return address를 위해 0(더미 값) 삽입
@@ -402,7 +402,7 @@ load (const char *file_name, struct intr_frame *if_) {
 		goto done;
 	}
 
-	t -> runn_file = file;
+	t -> run_file = file;
 	file_deny_write(file);
 
 	/* Read and verify executable header. */

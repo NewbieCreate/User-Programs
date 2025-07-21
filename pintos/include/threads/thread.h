@@ -104,6 +104,8 @@ struct thread {
 	struct supplemental_page_table spt;
 #endif
 
+	struct file *run_file; 
+	
 	/* Owned by thread.c. */
 	struct intr_frame tf;               /* Information for switching */
 	unsigned magic;                     /* Detects stack overflow. */
