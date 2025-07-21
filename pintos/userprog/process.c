@@ -66,7 +66,7 @@ initd (void *f_name) {
 
 	process_init ();
 
-	if (process_exec (f_name) < 0)
+	if (process_exec(f_name) < 0)
 		PANIC("Fail to launch initd\n");
 	NOT_REACHED ();
 }
@@ -158,33 +158,83 @@ error:
 	thread_exit ();
 }
 
-/* Switch the current execution context to the f_name.
- * Returns -1 on fail. */
+//유저 스택에 파싱된 토큰을 저장하는 함수
+void argument_stack(char **argv, int argc, struct intr_frame *if_){
+	char *arg_addr[100];
+	int argv_len;
+
+	// 인자들을 스택에 역순으로 push
+	for(int i = argc -1; i >=0; i--){
+		argv_len = strlen(argv[i]) + 1
+		if_ -> rsp -= argv_len;
+		memcpy(if_->rsp, argv[i], argv_len);
+		arg_addr[i] = if_ -> rsp;
+	}
+
+	// 스택 주소를 8의 배수로 정렬
+	while(if_ -> rsp % 8){
+		if_->rsp--;		// 스택 포인터를 1 바이트 내리고 , 0(padding)으로 채움
+		*(uint8_t *)(--if_->rsp) = 0;
+	}
+
+	// 마지막 인자를 널 포인터 삽입
+	if_->rsp -= 8;
+	memset(if_->rsp, 0, sizeof(char *));
+
+	// 인자들의 주소를 스택에 역순으로 PUSH
+	for(int i = argc - 1; i >= 0; i--){
+		if_ -> rsp -= 8;
+		memcpy(if_rsp, &arg_addr[i], sizeof(char *));
+	}
+
+	// return address를 위해 0(더미 값) 삽입
+	if_->rsp = if_->rsp - 8;
+	memset(if_->rsp, 0, sizeof(void *));
+
+	// 새 프로세스가 받을 인자 정보(argc, argv)를 레지스터에 설정
+	if_->R.rdi = argc;
+	if_->R.rsi = if_->rsp + 8;
+}
+
+/* 현재 실행 컨텍스트를 f_name으로 전환합니다.
+ * 실패 시 -1을 반환합니다. */
 int
 process_exec (void *f_name) {
 	char *file_name = f_name;
 	bool success;
 
-	/* We cannot use the intr_frame in the thread structure.
-	 * This is because when current thread rescheduled,
-	 * it stores the execution information to the member. */
+	/* 스레드 구조체 안의 intr_frame을 사용할 수 업습니다.
+	 * 이는 현재 스레드가 재스케줄 될 때,
+	 * 해당 멤버에 실행 정보를 저장하기 때문입니다. */
 	struct intr_frame _if;
 	_if.ds = _if.es = _if.ss = SEL_UDSEG;
 	_if.cs = SEL_UCSEG;
 	_if.eflags = FLAG_IF | FLAG_MBS;
 
-	/* We first kill the current context */
+	/* 현재 컨텍스트를 종료합니다. */
 	process_cleanup ();
 
-	/* And then load the binary */
+	/** project2-Command Line Parsing */
+	char *ptr, *arg;
+    int arg_cnt = 0;
+    char *arg_list[32];
+
+	// file_name을 공백 기준으로 인자 나눔
+    for (arg = strtok_r(file_name, " ", &ptr); arg != NULL; arg = strtok_r(NULL, " ", &ptr))
+        arg_list[arg_cnt++] = arg;
+
+	/* 바이너리를 로드합니다. (즉, 실행 가능한 파일을 적재한다.) */
 	success = load (file_name, &_if);
 
-	/* If load failed, quit. */
+	/** project2-Command Line Parsing */
+	argument_stack(arg_list, arg_cnt, &_if);
+
+	/* 로드에 실패하면 종료합니다. */
 	palloc_free_page (file_name);
 	if (!success)
 		return -1;
-
-	/* Start switched process. */
+	
+	/* 교환된 프로세스를 시작합니다. */
 	do_iret (&_if);
 	NOT_REACHED ();
 }
@@ -204,6 +254,8 @@ process_wait (tid_t child_tid UNUSED) {
 	/* XXX: Hint) The pintos exit if process_wait (initd), we recommend you
 	 * XXX:       to add infinite loop here before
 	 * XXX:       implementing the process_wait. */
+	while(1){}
+
 	return -1;
 }
 
@@ -342,6 +394,9 @@ load (const char *file_name, struct intr_frame *if_) {
 		goto done;
 	}
 
+	t -> runn_file = file;
+	file_deny_write(file);
+
 	/* Read and verify executable header. */
 	if (file_read (file, &ehdr, sizeof ehdr) != sizeof ehdr
 			|| memcmp (ehdr.e_ident, "\177ELF\2\1\1", 7)
@@ -408,7 +463,7 @@ load (const char *file_name, struct intr_frame *if_) {
 	}
 
 	/* Set up stack. */
-	if (!setup_stack (if_))
+	if (!setup_stack(if_))
 		goto done;
 
 	/* Start address. */
