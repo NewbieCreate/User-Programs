@@ -10,56 +10,64 @@
 static void vprintf_helper (char, void *);
 static void putchar_have_lock (uint8_t c);
 
-/* The console lock.
-   Both the vga and serial layers do their own locking, so it's
-   safe to call them at any time.
-   But this lock is useful to prevent simultaneous printf() calls
-   from mixing their output, which looks confusing. */
+/* 콘솔 락(console lock)
+
+   VGA 계층과 시리얼(serial) 계층은 각각 자체적인 락을 가지고 있기 때문에,
+   언제든지 그들을 호출해도 안전합니다.
+
+   하지만 이 콘솔 락은 동시에 여러 printf() 호출이 일어나서
+   출력 내용이 섞이는 것을 방지하는 데 유용합니다.
+   출력이 섞이면 매우 혼란스러워 보이기 때문입니다.
+ */
 static struct lock console_lock;
 
-/* True in ordinary circumstances: we want to use the console
-   lock to avoid mixing output between threads, as explained
-   above.
+/* 일반적인 상황에서는 true입니다.
+   위에서 설명한 것처럼, 여러 스레드 간 출력이 섞이는 것을 방지하기 위해 console_lock을 사용하려고 하기 때문입니다.
 
-   False in early boot before the point that locks are functional
-   or the console lock has been initialized, or after a kernel
-   panics.  In the former case, taking the lock would cause an
-   assertion failure, which in turn would cause a panic, turning
-   it into the latter case.  In the latter case, if it is a buggy
-   lock_acquire() implementation that caused the panic, we'll
-   likely just recurse. */
+   하지만 다음과 같은 예외 상황에서는 false가 됩니다:
+   - 부트 초기 단계에서 아직 락(lock) 시스템이 동작하지 않거나 console_lock이 초기화되기 전
+   - 또는 커널 패닉 이후
+
+   첫 번째 경우에는 락을 시도하면 assertion failure(단정문 오류)가 발생하게 되고,
+   이는 커널 패닉으로 이어져 결국 두 번째 경우가 됩니다.
+
+   두 번째 경우(커널 패닉 이후)에는 만약 panic을 유발한 원인이 buggy한 lock_acquire() 구현이었다면,
+   다시 락을 시도하면서 재귀적으로 같은 문제가 반복될 수 있습니다.
+ */
 static bool use_console_lock;
 
-/* It's possible, if you add enough debug output to Pintos, to
-   try to recursively grab console_lock from a single thread.  As
-   a real example, I added a printf() call to palloc_free().
-   Here's a real backtrace that resulted:
+/* 디버그 출력을 충분히 추가하면,
+   Pintos에서 하나의 스레드가 console_lock을 재귀적으로 획득하려고 시도하는 상황이 발생할 수 있습니다.
+
+   실제 예를 하나 들자면, 제가 palloc_free() 함수 안에 printf() 호출을 추가했을 때 발생한 일입니다.
+   다음은 그 결과로 발생한 실제 백트레이스입니다:
 
    lock_console()
    vprintf()
-   printf()             - palloc() tries to grab the lock again
+   printf()             - 여기서 palloc()이 다시 lock을 잡으려 함
    palloc_free()        
-   schedule_tail()      - another thread dying as we switch threads
+   schedule_tail()      - 다른 스레드가 죽고 해당 스레드로 전환 중
    schedule()
    thread_yield()
-   intr_handler()       - timer interrupt
+   intr_handler()       - 타이머 인터럽트 발생
    intr_set_level()
    serial_putc()
    putchar_have_lock()
    putbuf()
-   sys_write()          - one process writing to the console
+   sys_write()          - 한 프로세스가 콘솔에 쓰기 요청
    syscall_handler()
    intr_handler()
 
-   This kind of thing is very difficult to debug, so we avoid the
-   problem by simulating a recursive lock with a depth
-   counter. */
+   이런 문제는 디버깅이 매우 어렵기 때문에,
+   우리는 락을 재귀적으로 획득하는 것처럼 동작하게 하기 위해,
+   'depth counter(깊이 카운터)'를 사용해 이 문제를 방지합니다.
+ */
 static int console_lock_depth;
 
 /* Number of characters written to console. */
 static int64_t write_cnt;
 
-/* Enable console locking. */
+/* 콘솔 출력을 보호하기 위해 락 기능을 활성화합니다. */
 void
 console_init (void) {
 	lock_init (&console_lock);
@@ -111,9 +119,10 @@ console_locked_by_current_thread (void) {
 			|| lock_held_by_current_thread (&console_lock));
 }
 
-/* The standard vprintf() function,
-   which is like printf() but uses a va_list.
-   Writes its output to both vga display and serial port. */
+/* 표준 vprintf() 함수입니다.
+   이 함수는 printf()와 유사하지만, 인자 전달에 va_list를 사용합니다.
+   출력은 VGA 디스플레이와 시리얼 포트 양쪽 모두에 출력됩니다.
+ */
 int
 vprintf (const char *format, va_list args) {
 	int char_cnt = 0;
@@ -125,8 +134,7 @@ vprintf (const char *format, va_list args) {
 	return char_cnt;
 }
 
-/* Writes string S to the console, followed by a new-line
-   character. */
+/* 문자열 S를 콘솔에 출력하고, 그 뒤에 줄 바꿈(new-line) 문자를 추가합니다. */
 int
 puts (const char *s) {
 	acquire_console ();
@@ -138,7 +146,7 @@ puts (const char *s) {
 	return 0;
 }
 
-/* Writes the N characters in BUFFER to the console. */
+/* BUFFER에 있는 N개의 문자를 콘솔에 출력합니다. */
 void
 putbuf (const char *buffer, size_t n) {
 	acquire_console ();

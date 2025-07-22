@@ -163,25 +163,24 @@ error:
 
 /* Switch the current execution context to the f_name.
  * Returns -1 on fail. */
-int
-process_exec (void *f_name) {
+int process_exec(void *f_name) {
     char *file_name = f_name;
     bool success;
 
+    /* 인터럽트 프레임 설정 (사용자 모드 진입용) */
     struct intr_frame _if;
     _if.ds = _if.es = _if.ss = SEL_UDSEG;
     _if.cs = SEL_UCSEG;
     _if.eflags = FLAG_IF | FLAG_MBS;
 
-    /* We first kill the current context */
-    process_cleanup ();
+    /* 현재 프로세스 컨텍스트 정리 */
+    process_cleanup();
 
-    /* === 개선된 부분 시작 === */
-
-    // 1. 인자 파싱을 한 번만 수행
+    /* ------------------- 인자 파싱 ------------------- */
     char *fn_copy = palloc_get_page(0);
     if (fn_copy == NULL)
         return -1;
+
     strlcpy(fn_copy, file_name, PGSIZE);
 
     char *argv[128];
@@ -194,60 +193,57 @@ process_exec (void *f_name) {
         argv[argc++] = token;
     }
 
-    // 2. 파싱 결과(argv[0])를 이용해 바이너리 로드
+    /* ---------------- 바이너리 로드 ----------------- */
     success = load(argv[0], &_if);
-
     if (!success) {
         palloc_free_page(fn_copy);
-        // file_name은 process_create_initd에서 할당되었으므로 여기서 해제
-        // thread_create의 aux로 전달되었으므로 thread_exit에서 해제하는게 더 안전할 수 있음
-        // Pintos 기본 구조에서는 initd의 f_name은 caller가 해제하지 않음
-        // 하지만 process_exec으로 넘어온 f_name은 process_create_initd에서 할당한 것.
-        // 실패 시 여기서 해제하는 것이 맞음.
-        palloc_free_page(file_name); 
+        palloc_free_page(file_name);
         return -1;
     }
-    
-    /* === 개선된 부분 끝 === */
 
-
-    /* 3. 이미 파싱된 argv를 이용해 스택 설정 (이 부분은 기존과 동일) */
+    /* ---------------- 사용자 스택 구성 ---------------- */
     uintptr_t rsp = _if.rsp;
 
+    /* 문자열 복사: 뒤에서부터 문자열 복사 (word alignment 고려) */
     for (int i = argc - 1; i >= 0; i--) {
         size_t len = strlen(argv[i]) + 1;
         rsp -= len;
         memcpy((void *)rsp, argv[i], len);
-        argv[i] = (char *)rsp;
+        argv[i] = (char *)rsp;  // 주소 업데이트
     }
 
-    rsp = rsp & ~7; 
+    /* word alignment 맞추기 (8의 배수) */
+    rsp = rsp & ~0x7;
 
+    /* NULL sentinel */
     rsp -= sizeof(char *);
     *(char **)rsp = NULL;
 
+    /* argv[i] 포인터들 스택에 저장 */
     for (int i = argc - 1; i >= 0; i--) {
         rsp -= sizeof(char *);
         *(char **)rsp = argv[i];
     }
-    
+
+    /* argv 시작 위치 저장 */
     char **argv_start = (char **)rsp;
 
+    /* align용 dummy 포인터 */
     rsp -= sizeof(void *);
     *(void **)rsp = NULL;
 
+    /* ---------------- 레지스터 설정 ---------------- */
     _if.rsp = rsp;
     _if.R.rdi = argc;
     _if.R.rsi = (uintptr_t)argv_start;
 
-    /* 메모리 정리 */
+    /* ---------------- 정리 및 사용자모드 진입 ---------------- */
     palloc_free_page(fn_copy);
-    // 성공 시 file_name은 더 이상 필요 없으므로 해제
     palloc_free_page(file_name);
 
-    /* Start switched process. */
-    do_iret (&_if);
-    NOT_REACHED ();
+	hex_dump(_if.rsp - 128, (const void *)(_if.rsp - 128), 128, true);
+    do_iret(&_if);
+    NOT_REACHED();
 }
 
 /* Waits for thread TID to die and returns its exit status.  If

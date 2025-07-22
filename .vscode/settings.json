@@ -1,0 +1,14 @@
+{
+    "files.associations": {
+        "tss.h": "c",
+        "filesys.h": "c",
+        "init.h": "c",
+        "interrupt.h": "c",
+        "process.h": "c",
+        "string.h": "c",
+        "stdbool.h": "c",
+        "syscall.h": "c",
+        "console.h": "c",
+        "intrinsic.h": "c"
+    }
+}
