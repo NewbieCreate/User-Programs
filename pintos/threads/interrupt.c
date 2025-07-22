@@ -231,19 +231,19 @@ intr_register_ext (uint8_t vec_no, intr_handler_func *handler,
 	register_handler (vec_no, 0, INTR_OFF, handler, name);
 }
 
-/* Registers internal interrupt VEC_NO to invoke HANDLER, which
-   is named NAME for debugging purposes.  The interrupt handler
-   will be invoked with interrupt status LEVEL.
+/* 내부 인터럽트 번호 VEC_NO에 대해 인터럽트 핸들러 HANDLER를 등록합니다.
+   이 핸들러는 디버깅 목적으로 NAME이라는 이름을 가집니다.
+   인터럽트가 발생하면, 인터럽트 상태 LEVEL에 따라 이 핸들러가 호출됩니다.
 
-   The handler will have descriptor privilege level DPL, meaning
-   that it can be invoked intentionally when the processor is in
-   the DPL or lower-numbered ring.  In practice, DPL==3 allows
-   user mode to invoke the interrupts and DPL==0 prevents such
-   invocation.  Faults and exceptions that occur in user mode
-   still cause interrupts with DPL==0 to be invoked.  See
-   [IA32-v3a] sections 4.5 "Privilege Levels" and 4.8.1.1
-   "Accessing Nonconforming Code Segments" for further
-   discussion. */
+   핸들러는 DPL(Descriptor Privilege Level)을 갖습니다.  
+   DPL은 이 핸들러가 어떤 권한 수준(ring)에서 호출될 수 있는지를 의미합니다.  
+   실제로 DPL이 3이면 사용자 모드(유저 레벨)에서도 해당 인터럽트를 명시적으로 호출할 수 있고,  
+   DPL이 0이면 사용자 모드에서는 호출할 수 없습니다.
+
+   단, 사용자 모드에서 예외나 오류가 발생했을 때는 DPL이 0인 인터럽트도 자동으로 호출됩니다.
+
+   자세한 내용은 [IA32-v3a] 문서의 4.5절 "Privilege Levels"와 4.8.1.1절
+   "Accessing Nonconforming Code Segments"를 참고하세요. */
 void
 intr_register_int (uint8_t vec_no, int dpl, enum intr_level level,
 		intr_handler_func *handler, const char *name)
@@ -269,22 +269,23 @@ intr_yield_on_return (void) {
 	yield_on_return = true;
 }
 
-/* 8259A Programmable Interrupt Controller. */
+/* 8259A 프로그래머블 인터럽트 컨트롤러(PIC) */
 
-/* Every PC has two 8259A Programmable Interrupt Controller (PIC)
-   chips.  One is a "master" accessible at ports 0x20 and 0x21.
-   The other is a "slave" cascaded onto the master's IRQ 2 line
-   and accessible at ports 0xa0 and 0xa1.  Accesses to port 0x20
-   set the A0 line to 0 and accesses to 0x21 set the A1 line to
-   1.  The situation is similar for the slave PIC.
+/* 모든 PC에는 두 개의 8259A 프로그래머블 인터럽트 컨트롤러(PIC) 칩이 있습니다.
+   하나는 "마스터"로, 포트 0x20과 0x21을 통해 접근할 수 있습니다.
+   다른 하나는 "슬레이브"로, 마스터의 IRQ 2 라인에 연결되어 있으며
+   포트 0xa0과 0xa1을 통해 접근할 수 있습니다.
 
-   By default, interrupts 0...15 delivered by the PICs will go to
-   interrupt vectors 0...15.  Unfortunately, those vectors are
-   also used for CPU traps and exceptions.  We reprogram the PICs
-   so that interrupts 0...15 are delivered to interrupt vectors
-   32...47 (0x20...0x2f) instead. */
+   포트 0x20에 접근하면 A0 라인이 0으로 설정되고,
+   포트 0x21에 접근하면 A1 라인이 1로 설정됩니다.
+   슬레이브 PIC도 유사한 방식으로 동작합니다.
 
-/* Initializes the PICs.  Refer to [8259A] for details. */
+   기본적으로, PIC들이 전달하는 인터럽트 0~15번은 인터럽트 벡터 0~15번으로 매핑됩니다.
+   그러나 이 벡터들은 CPU 트랩(trap)과 예외(exception) 처리에도 사용되기 때문에,
+   우리는 PIC을 다시 프로그래밍하여 인터럽트 0~15번을 인터럽트 벡터 32~47번
+   (즉, 0x20~0x2f)으로 전달되도록 설정합니다. */
+
+/* PIC들을 초기화합니다. 자세한 내용은 [8259A] 문서를 참고하세요. */
 static void
 pic_init (void) {
 	/* Mask all interrupts on both PICs. */

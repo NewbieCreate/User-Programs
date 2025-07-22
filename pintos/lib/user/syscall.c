@@ -1,6 +1,9 @@
 #include <syscall.h>
 #include <stdint.h>
 #include "../syscall-nr.h"
+#include <stdbool.h>
+
+typedef int pid_t;  // ← 이거 반드시 있어야 함
 
 __attribute__((always_inline))
 static __inline int64_t syscall (uint64_t num_, uint64_t a1_, uint64_t a2_,
@@ -28,6 +31,7 @@ static __inline int64_t syscall (uint64_t num_, uint64_t a1_, uint64_t a2_,
 			: "cc", "memory");
 	return ret;
 }
+
 
 /* Invokes syscall NUMBER, passing no arguments, and returns the
    return value as an `int'. */
