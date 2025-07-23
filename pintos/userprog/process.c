@@ -27,6 +27,13 @@ static bool load (const char *file_name, struct intr_frame *if_);
 static void initd (void *f_name);
 static void __do_fork (void *);
 
+struct fork_args {
+	struct intr_frame parent_if;
+	struct thread *parent;
+};
+
+
+
 /* General process initializer for initd and other process. */
 static void
 process_init (void) {
@@ -75,9 +82,25 @@ initd (void *f_name) {
  * TID_ERROR if the thread cannot be created. */
 tid_t
 process_fork (const char *name, struct intr_frame *if_ UNUSED) {
-	/* Clone current thread to new thread.*/
-	return thread_create (name,
-			PRI_DEFAULT, __do_fork, thread_current ());
+	/* 1.구조체 생성 */
+	struct fork_args *args = palloc_get_page(0);
+	args->parent = thread_current();
+	memcpy(&args->parent_if, if_, sizeof(struct intr_frame));
+
+	/* 2.세마초기화 */
+	sema_init(&thread_current()->fork_sema,0);
+
+	/* 3. 자식스레드 생성 */
+	tid_t tid = thread_create(name, PRI_DEFAULT, __do_fork, args);
+	if (tid == TID_ERROR)
+	{
+		palloc_free_page(args); //실패시 메모리 해체
+	}
+
+	/* 자식이 준비될때까지 대기 */
+	sema_down(&thread_current()->fork_sema);
+
+	return tid;
 }
 
 #ifndef VM
@@ -112,23 +135,24 @@ duplicate_pte (uint64_t *pte, void *va, void *aux) {
 }
 #endif
 
-/* A thread function that copies parent's execution context.
- * Hint) parent->tf does not hold the userland context of the process.
- *       That is, you are required to pass second argument of process_fork to
- *       this function. */
+/* 부모의 실행 컨텍스트를 복사하는 스레드 함수 입니다.
+ * Hint) parent->tf는 프로세스의 유저랜드 컨텍스트를 가지고 있지 않습니다.
+ *       즉, process_fork의 두 번째 인자를 이 함수로 전달해야 합니다.
+ */
 static void
 __do_fork (void *aux) {
-	struct intr_frame if_;
+	struct intr_frame if_;		// 자식 프로세스의 CPU 컨텍스트를 저장할 인터럽트 프레임 구조체 변수 선언
 	struct thread *parent = (struct thread *) aux;
 	struct thread *current = thread_current ();
-	/* TODO: somehow pass the parent_if. (i.e. process_fork()'s if_) */
+
+	/* TODO: 어떻게든 parent_if를 전달해야 합니다. (예: process_fork()의 if_) */
 	struct intr_frame *parent_if;
 	bool succ = true;
 
-	/* 1. Read the cpu context to local stack. */
+	/* 1. CPU 컨텍스트를 로컬 스택으로 읽어옵니다. */
 	memcpy (&if_, parent_if, sizeof (struct intr_frame));
 
-	/* 2. Duplicate PT */
+	/* 2. 페이지 테이블(PT)을 복제 */
 	current->pml4 = pml4_create();
 	if (current->pml4 == NULL)
 		goto error;
@@ -143,11 +167,16 @@ __do_fork (void *aux) {
 		goto error;
 #endif
 
-	/* TODO: Your code goes here.
-	 * TODO: Hint) To duplicate the file object, use `file_duplicate`
-	 * TODO:       in include/filesys/file.h. Note that parent should not return
-	 * TODO:       from the fork() until this function successfully duplicates
-	 * TODO:       the resources of parent.*/
+	/* TODO: 여기에 코드를 작성하세요.
+	   TODO: 힌트) 파일 객체를 복제하려면 include/filesys/file.h에 있는 file_duplicate를 사용하세요. 
+	   이 함수가 부모의 리소스를 성공적으로 복제하기 전까지 부모는 fork()에서 반환해서는 안 됩니다.
+	*/
+	for(int i = 0; i <FD_MAX; i++){
+		if(parent -> fd_table[i] != NULL){
+			current -> fd_table[i] = file_duplicate(parent ->fd_table[i]);
+		}
+	}
+	sema_up(&parent -> fork_sema);
 
 	process_init ();
 

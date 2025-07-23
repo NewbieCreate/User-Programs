@@ -1,6 +1,9 @@
 #ifndef THREADS_THREAD_H
 #define THREADS_THREAD_H
 
+#define FD_MAX 128
+
+
 #include <debug.h>
 #include <list.h>
 #include <stdint.h>
@@ -94,6 +97,9 @@ struct thread {
 
 	/* Shared between thread.c and synch.c. */
 	struct list_elem elem;              /* List element. */
+
+	struct semaphore fork_sema;
+	struct file *fd_table[FD_MAX];
 
 #ifdef USERPROG
 	/* Owned by userprog/process.c. */
