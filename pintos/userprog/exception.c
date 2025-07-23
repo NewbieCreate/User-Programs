@@ -12,36 +12,32 @@ static long long page_fault_cnt;
 static void kill (struct intr_frame *);
 static void page_fault (struct intr_frame *);
 
-/* Registers handlers for interrupts that can be caused by user
-   programs.
+/* 유저 프로그램에 의해 발생할 수 있는 인터럽트 핸들러들을 등록합니다.
 
-   In a real Unix-like OS, most of these interrupts would be
-   passed along to the user process in the form of signals, as
-   described in [SV-386] 3-24 and 3-25, but we don't implement
-   signals.  Instead, we'll make them simply kill the user
-   process.
+   실제 유닉스 계열 운영체제에서는, 대부분의 이런 인터럽트들이 [SV-386] 3-24와 3-25에
+   설명된 것처럼 시그널(signal) 형태로 유저 프로세스에 전달됩니다.
+   하지만 우리는 시그널을 구현하지 않습니다. 대신, 간단하게 유저 프로세스를
+   종료시키도록 만들 것입니다.
 
-   Page faults are an exception.  Here they are treated the same
-   way as other exceptions, but this will need to change to
-   implement virtual memory.
+   페이지 폴트는 예외입니다. 여기서는 다른 예외들과 동일한 방식으로 처리되지만,
+   가상 메모리를 구현하기 위해서는 이 부분을 변경해야 합니다.
 
-   Refer to [IA32-v3a] section 5.15 "Exception and Interrupt
-   Reference" for a description of each of these exceptions. */
+   각 예외에 대한 설명은 [IA32-v3a] 섹션 5.15 "Exception and Interrupt
+   Reference"를 참조하세요. */
 void
 exception_init (void) {
-	/* These exceptions can be raised explicitly by a user program,
-	   e.g. via the INT, INT3, INTO, and BOUND instructions.  Thus,
-	   we set DPL==3, meaning that user programs are allowed to
-	   invoke them via these instructions. */
+	/* 아래의 예외들은 유저 프로그램에 의해 명시적으로 발생할 수 있습니다.
+       (예: INT, INT3, INTO, BOUND 명령어 사용). 따라서,
+       DPL(Descriptor Privilege Level)을 3으로 설정하여 유저 프로그램이
+       이 명령어들을 통해 해당 인터럽트를 호출하는 것을 허용합니다. */
 	intr_register_int (3, 3, INTR_ON, kill, "#BP Breakpoint Exception");
 	intr_register_int (4, 3, INTR_ON, kill, "#OF Overflow Exception");
 	intr_register_int (5, 3, INTR_ON, kill,
 			"#BR BOUND Range Exceeded Exception");
 
-	/* These exceptions have DPL==0, preventing user processes from
-	   invoking them via the INT instruction.  They can still be
-	   caused indirectly, e.g. #DE can be caused by dividing by
-	   0.  */
+	/* 아래의 예외들은 DPL==0으로 설정되어, 유저 프로세스가 INT 명령어로
+       이들을 호출하는 것을 막습니다. 하지만 간접적으로는 발생할 수 있습니다.
+       (예: 0으로 나누면 #DE 예외 발생) */
 	intr_register_int (0, 0, INTR_ON, kill, "#DE Divide Error");
 	intr_register_int (1, 0, INTR_ON, kill, "#DB Debug Exception");
 	intr_register_int (6, 0, INTR_ON, kill, "#UD Invalid Opcode Exception");
@@ -54,9 +50,9 @@ exception_init (void) {
 	intr_register_int (19, 0, INTR_ON, kill,
 			"#XF SIMD Floating-Point Exception");
 
-	/* Most exceptions can be handled with interrupts turned on.
-	   We need to disable interrupts for page faults because the
-	   fault address is stored in CR2 and needs to be preserved. */
+	/* 대부분의 예외는 인터럽트가 켜진 상태에서 처리될 수 있습니다.
+       하지만 페이지 폴트의 경우, 폴트 주소가 CR2 레지스터에 저장되므로
+       그 값을 보존하기 위해 인터럽트를 비활성화해야 합니다. */
 	intr_register_int (14, 0, INTR_OFF, page_fault, "#PF Page-Fault Exception");
 }
 
@@ -105,56 +101,49 @@ kill (struct intr_frame *f) {
 	}
 }
 
-/* Page fault handler.  This is a skeleton that must be filled in
-   to implement virtual memory.  Some solutions to project 2 may
-   also require modifying this code.
+/* 페이지 폴트 핸들러. 이 코드는 가상 메모리를 구현하기 위해 채워져야 하는
+   기본 골격입니다. 프로젝트 2의 일부 해결책은 이 코드를
+   수정해야 할 수도 있습니다.
 
-   At entry, the address that faulted is in CR2 (Control Register
-   2) and information about the fault, formatted as described in
-   the PF_* macros in exception.h, is in F's error_code member.  The
-   example code here shows how to parse that information.  You
-   can find more information about both of these in the
-   description of "Interrupt 14--Page Fault Exception (#PF)" in
-   [IA32-v3a] section 5.15 "Exception and Interrupt Reference". */
+   핸들러 진입 시, 폴트를 발생시킨 주소는 CR2 (Control Register 2)에 저장되어 있고,
+   폴트에 대한 정보(exception.h의 PF_* 매크로에 설명된 형식)는
+   f->error_code 멤버에 있습니다. 여기 예제 코드는 해당 정보를
+   분석하는 방법을 보여줍니다. 이 두 가지에 대한 더 자세한 정보는
+   [IA32-v3a] 섹션 5.15 "Exception and Interrupt Reference"의
+   "Interrupt 14--Page Fault Exception (#PF)" 설명에서 찾을 수 있습니다. */
 static void
 page_fault (struct intr_frame *f) {
-	bool not_present;  /* True: not-present page, false: writing r/o page. */
-	bool write;        /* True: access was write, false: access was read. */
-	bool user;         /* True: access by user, false: access by kernel. */
-	void *fault_addr;  /* Fault address. */
+    void *fault_addr = (void *) rcr2();  // 폴트 발생 주소
+    intr_enable();  // 인터럽트 재허용
 
-	/* Obtain faulting address, the virtual address that was
-	   accessed to cause the fault.  It may point to code or to
-	   data.  It is not necessarily the address of the instruction
-	   that caused the fault (that's f->rip). */
+    bool not_present = (f->error_code & PF_P) == 0;  // 페이지 없음
+    bool write = (f->error_code & PF_W) != 0;        // 쓰기 접근
+    bool user = (f->error_code & PF_U) != 0;         // 사용자 접근
 
-	fault_addr = (void *) rcr2();
-
-	/* Turn interrupts back on (they were only off so that we could
-	   be assured of reading CR2 before it changed). */
-	intr_enable ();
-
-
-	/* Determine cause. */
-	not_present = (f->error_code & PF_P) == 0;
-	write = (f->error_code & PF_W) != 0;
-	user = (f->error_code & PF_U) != 0;
+    // 커널이 유저 주소에 접근해서 page fault 발생한 경우: 시스템콜 안에서 포인터 확인 안 했다는 뜻
+    if (!user && is_user_vaddr(fault_addr)) {
+        thread_exit();
+    }
 
 #ifdef VM
-	/* For project 3 and later. */
-	if (vm_try_handle_fault (f, fault_addr, user, write, not_present))
-		return;
+    if (vm_try_handle_fault(f, fault_addr, user, write, not_present))
+        return;
 #endif
 
-	/* Count page faults. */
-	page_fault_cnt++;
+    page_fault_cnt++;
 
-	/* If the fault is true fault, show info and exit. */
-	printf ("Page fault at %p: %s error %s page in %s context.\n",
-			fault_addr,
-			not_present ? "not present" : "rights violation",
-			write ? "writing" : "reading",
-			user ? "user" : "kernel");
-	kill (f);
+    // 유저 프로세스가 잘못된 주소 접근 → 테스트 요구에 따라 exit(-1)
+    if (user) {
+        exit(-1);  // 이걸 꼭 호출해야 bad-read 같은 테스트가 통과함
+    }
+
+    // 커널 모드 오류면 PANIC
+    printf ("Page fault at %p: %s error %s page in %s context.\n",
+            fault_addr,
+            not_present ? "not present" : "rights violation",
+            write ? "writing" : "reading",
+            user ? "user" : "kernel");
+    kill(f);  // 최후 수단
 }
+
 

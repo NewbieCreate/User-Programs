@@ -36,8 +36,8 @@ struct gp_registers {
 
 struct intr_frame {
 	/* Pushed by intr_entry in intr-stubs.S.
-	   These are the interrupted task's saved registers. */
-	struct gp_registers R;
+	   이것들은 인터럽트된 태스크의 저장된 레지스터들입니다. */
+	struct gp_registers R;		// 모든 범용 레지스터(rax, rbx, rcx 등)를 포함하는 구조체입니다.
 	uint16_t es;
 	uint16_t __pad1;
 	uint32_t __pad2;
@@ -45,19 +45,19 @@ struct intr_frame {
 	uint16_t __pad3;
 	uint32_t __pad4;
 	/* Pushed by intrNN_stub in intr-stubs.S. */
-	uint64_t vec_no; /* Interrupt vector number. */
-/* Sometimes pushed by the CPU,
-   otherwise for consistency pushed as 0 by intrNN_stub.
-   The CPU puts it just under `eip', but we move it here. */
+	uint64_t vec_no; /* 인터럽트 벡터 번호. 어떤 종류의 인터럽트가 발생했는지를 나타냅니다. */
+	/* 특정 예외에서는 CPU에 의해 푸시되기도 하고,
+       그렇지 않은 경우에는 일관성을 위해 intrNN_stub에서 0으로 푸시합니다.
+       CPU는 이 값을 'rip' 바로 아래에 위치시키지만, 우리는 여기로 옮겼습니다. */
 	uint64_t error_code;
 /* Pushed by the CPU.
    These are the interrupted task's saved registers. */
-	uintptr_t rip;
+	uintptr_t rip;		// 명령어 포인터(Instruction Pointer). 인터럽트 발생 후 돌아갈 코드의 주소입니다.
 	uint16_t cs;
 	uint16_t __pad5;
 	uint32_t __pad6;
 	uint64_t eflags;
-	uintptr_t rsp;
+	uintptr_t rsp;		// 스택 포인터(Stack Pointer). 인터럽트 발생 시점의 스택 위치입니다.
 	uint16_t ss;
 	uint16_t __pad7;
 	uint32_t __pad8;

@@ -24,6 +24,67 @@ void syscall_handler (struct intr_frame *);
 #define MSR_LSTAR 0xc0000082        /* Long mode SYSCALL target */
 #define MSR_SYSCALL_MASK 0xc0000084 /* Mask for the eflags */
 
+int64_t
+get_user (const uint8_t *uaddr) {
+    int64_t result;
+
+    asm volatile (
+        "1:\n"
+        "movzbq (%1), %0\n"     // uaddr의 1바이트를 읽어서 zero-extend하여 result에 저장
+        "2:\n"
+        ".pushsection .text\n"
+        ".global user_access_end_get\n"
+        "user_access_end_get:\n"
+        "ret\n"
+        ".popsection\n"
+        ".section .fixup,\"ax\"\n"
+        "3:\n"
+        "mov $-1, %0\n"         // 예외 발생 시 -1 리턴
+        "jmp 2b\n"              // 다시 정상 흐름으로 점프
+        ".previous\n"
+        ".section __ex_table,\"a\"\n"
+        ".quad 1b,3b\n"         // 예외 복구 테이블: 1번 줄 예외 발생 시 3번 줄로 점프
+        ".previous"
+        : "=&a" (result)
+        : "r" (uaddr)
+        : "memory"
+    );
+
+    return result;
+}
+
+
+bool
+put_user (uint8_t *udst, uint8_t byte) {
+    int success;
+
+    asm volatile (
+        "1:\n"
+        "movb %b2, (%1)\n"
+        "mov $0, %0\n"
+        "2:\n"
+        ".pushsection .text\n"
+        ".global user_access_end_put\n"
+        "user_access_end_put:\n"
+        "ret\n"
+        ".popsection\n"
+        ".section .fixup,\"ax\"\n"
+        "3:\n"
+        "mov $-1, %0\n"
+        "jmp 2b\n"
+        ".previous\n"
+        ".section __ex_table,\"a\"\n"
+        ".quad 1b,3b\n"
+        ".previous"
+        : "=r" (success)
+        : "r" (udst), "q" (byte)
+        : "memory"
+    );
+
+    return success == 0;
+}
+
+
 void
 syscall_init (void) {
 	write_msr(MSR_STAR, ((uint64_t)SEL_UCSEG - 0x10) << 48  |
@@ -42,13 +103,8 @@ void
 syscall_handler (struct intr_frame *f UNUSED) {
 	switch (f->R.rax) {
 		case SYS_EXIT:
-			{
-				int status = (int)f->R.rdi;
-				// exit status 출력 - 이것이 중요!
-				printf("%s: exit(%d)\n", thread_current()->name, status);
-				thread_exit();
-			}
-			break;
+    		exit((int)f->R.rdi);
+    		break;
 			
 		case SYS_WRITE:
 			{
@@ -64,10 +120,15 @@ syscall_handler (struct intr_frame *f UNUSED) {
 				}
 			}
 			break;
-			
+		
 		default:
 			printf("Unimplemented system call: %lld\n", f->R.rax);
 			thread_exit();
 			break;
 	}
+}
+
+void exit(int status) {
+    printf("%s: exit(%d)\n", thread_current()->name, status);
+    thread_exit();  // 실제로 스레드 종료
 }

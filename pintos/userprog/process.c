@@ -158,11 +158,16 @@ error:
 	thread_exit ();
 }
 
-/* Switch the current execution context to the f_name.
- * Returns -1 on fail. */
+/*
+	인터럽트 프레임 초기화 (사용자 모드로 실행할 수 있게)
+	현재 프로세스 정리
+	실행 파일 인자 파싱
+	실행 파일 로딩
+	사용자 스택 초기화
+	메모리 정리
+	사용자 프로그램 실행 시작 (사용자 모드)
+*/
 
-/* Switch the current execution context to the f_name.
- * Returns -1 on fail. */
 int
 process_exec (void *f_name) {
     char *file_name = f_name;
@@ -173,13 +178,11 @@ process_exec (void *f_name) {
     _if.cs = SEL_UCSEG;
     _if.eflags = FLAG_IF | FLAG_MBS;
 
-    /* We first kill the current context */
+    /* 현재 프로세스 정리 */
     process_cleanup ();
 
-    /* === 개선된 부분 시작 === */
-
     // 1. 인자 파싱을 한 번만 수행
-    char *fn_copy = palloc_get_page(0);
+    char *fn_copy = palloc_get_page(0);		// 페이지를 할당받아 복사본으로 사용
     if (fn_copy == NULL)
         return -1;
     strlcpy(fn_copy, file_name, PGSIZE);
@@ -198,7 +201,7 @@ process_exec (void *f_name) {
     success = load(argv[0], &_if);
 
     if (!success) {
-        palloc_free_page(fn_copy);
+        palloc_free_page(fn_copy);		// 파싱을 위해 만들었던 복사본 메모리를 해제
         // file_name은 process_create_initd에서 할당되었으므로 여기서 해제
         // thread_create의 aux로 전달되었으므로 thread_exit에서 해제하는게 더 안전할 수 있음
         // Pintos 기본 구조에서는 initd의 f_name은 caller가 해제하지 않음
@@ -208,12 +211,12 @@ process_exec (void *f_name) {
         return -1;
     }
     
-    /* === 개선된 부분 끝 === */
-
 
     /* 3. 이미 파싱된 argv를 이용해 스택 설정 (이 부분은 기존과 동일) */
+	// 유저 스택의 시작 주소
     uintptr_t rsp = _if.rsp;
 
+	// 인자를 스택에 푸시한다.(역으로)
     for (int i = argc - 1; i >= 0; i--) {
         size_t len = strlen(argv[i]) + 1;
         rsp -= len;
@@ -221,57 +224,47 @@ process_exec (void *f_name) {
         argv[i] = (char *)rsp;
     }
 
+	// 스택 주소를 8바이트 정렬
     rsp = rsp & ~7; 
 
+	// 마지막 NULL 포인터 (argv[argc] = NULL)
     rsp -= sizeof(char *);
     *(char **)rsp = NULL;
 
+	// argv 포인터를 스택에 push (역순으로)
     for (int i = argc - 1; i >= 0; i--) {
         rsp -= sizeof(char *);
         *(char **)rsp = argv[i];
     }
     
+	// argv 시작 주소 저장
     char **argv_start = (char **)rsp;
 
-    rsp -= sizeof(void *);
-    *(void **)rsp = NULL;
+	// 임의의 return address NULL push
+    rsp -= sizeof(void *);		
+    *(void **)rsp = NULL;		
 
+	// 인터럽트 프레임에 최종 스택 포인터 설정
     _if.rsp = rsp;
-    _if.R.rdi = argc;
-    _if.R.rsi = (uintptr_t)argv_start;
+    _if.R.rdi = argc;		// 첫번째 인자 레지스터에는 argc 삽입
+    _if.R.rsi = (uintptr_t)argv_start;		// 두 번째 인자 레지스터에는 argv의 시작 주소를 삽입
 
     /* 메모리 정리 */
     palloc_free_page(fn_copy);
-    // 성공 시 file_name은 더 이상 필요 없으므로 해제
-    palloc_free_page(file_name);
+    palloc_free_page(file_name);		// 원본도 성공 시 해제
 
     /* Start switched process. */
     do_iret (&_if);
     NOT_REACHED ();
 }
 
-/* Waits for thread TID to die and returns its exit status.  If
- * it was terminated by the kernel (i.e. killed due to an
- * exception), returns -1.  If TID is invalid or if it was not a
- * child of the calling process, or if process_wait() has already
- * been successfully called for the given TID, returns -1
- * immediately, without waiting.
- *
- * This function will be implemented in problem 2-2.  For now, it
- * does nothing. */
-// int
-// process_wait (tid_t child_tid UNUSED) {
-// 	/* XXX: Hint) The pintos exit if process_wait (initd), we recommend you
-// 	 * XXX:       to add infinite loop here before
-// 	 * XXX:       implementing the process_wait. */
-// 	return -1;
-// }
+
 
 int
 process_wait (tid_t child_tid UNUSED) {
 	/* 임시로 무한 루프 추가 */
 	while (1) {
-		thread_yield();
+		
 	}
 	return -1;
 }
