@@ -160,35 +160,95 @@ error:
 
 /* Switch the current execution context to the f_name.
  * Returns -1 on fail. */
+
+/* Switch the current execution context to the f_name.
+ * Returns -1 on fail. */
 int
 process_exec (void *f_name) {
-	char *file_name = f_name;
-	bool success;
+    char *file_name = f_name;
+    bool success;
 
-	/* We cannot use the intr_frame in the thread structure.
-	 * This is because when current thread rescheduled,
-	 * it stores the execution information to the member. */
-	struct intr_frame _if;
-	_if.ds = _if.es = _if.ss = SEL_UDSEG;
-	_if.cs = SEL_UCSEG;
-	_if.eflags = FLAG_IF | FLAG_MBS;
+    struct intr_frame _if;
+    _if.ds = _if.es = _if.ss = SEL_UDSEG;
+    _if.cs = SEL_UCSEG;
+    _if.eflags = FLAG_IF | FLAG_MBS;
 
-	/* We first kill the current context */
-	process_cleanup ();
+    /* We first kill the current context */
+    process_cleanup ();
 
-	/* And then load the binary */
-	success = load (file_name, &_if);
+    /* === 개선된 부분 시작 === */
 
-	/* If load failed, quit. */
-	palloc_free_page (file_name);
-	if (!success)
-		return -1;
+    // 1. 인자 파싱을 한 번만 수행
+    char *fn_copy = palloc_get_page(0);
+    if (fn_copy == NULL)
+        return -1;
+    strlcpy(fn_copy, file_name, PGSIZE);
 
-	/* Start switched process. */
-	do_iret (&_if);
-	NOT_REACHED ();
+    char *argv[128];
+    int argc = 0;
+    char *token, *save_ptr;
+
+    for (token = strtok_r(fn_copy, " ", &save_ptr);
+         token != NULL;
+         token = strtok_r(NULL, " ", &save_ptr)) {
+        argv[argc++] = token;
+    }
+
+    // 2. 파싱 결과(argv[0])를 이용해 바이너리 로드
+    success = load(argv[0], &_if);
+
+    if (!success) {
+        palloc_free_page(fn_copy);
+        // file_name은 process_create_initd에서 할당되었으므로 여기서 해제
+        // thread_create의 aux로 전달되었으므로 thread_exit에서 해제하는게 더 안전할 수 있음
+        // Pintos 기본 구조에서는 initd의 f_name은 caller가 해제하지 않음
+        // 하지만 process_exec으로 넘어온 f_name은 process_create_initd에서 할당한 것.
+        // 실패 시 여기서 해제하는 것이 맞음.
+        palloc_free_page(file_name); 
+        return -1;
+    }
+    
+    /* === 개선된 부분 끝 === */
+
+
+    /* 3. 이미 파싱된 argv를 이용해 스택 설정 (이 부분은 기존과 동일) */
+    uintptr_t rsp = _if.rsp;
+
+    for (int i = argc - 1; i >= 0; i--) {
+        size_t len = strlen(argv[i]) + 1;
+        rsp -= len;
+        memcpy((void *)rsp, argv[i], len);
+        argv[i] = (char *)rsp;
+    }
+
+    rsp = rsp & ~7; 
+
+    rsp -= sizeof(char *);
+    *(char **)rsp = NULL;
+
+    for (int i = argc - 1; i >= 0; i--) {
+        rsp -= sizeof(char *);
+        *(char **)rsp = argv[i];
+    }
+    
+    char **argv_start = (char **)rsp;
+
+    rsp -= sizeof(void *);
+    *(void **)rsp = NULL;
+
+    _if.rsp = rsp;
+    _if.R.rdi = argc;
+    _if.R.rsi = (uintptr_t)argv_start;
+
+    /* 메모리 정리 */
+    palloc_free_page(fn_copy);
+    // 성공 시 file_name은 더 이상 필요 없으므로 해제
+    palloc_free_page(file_name);
+
+    /* Start switched process. */
+    do_iret (&_if);
+    NOT_REACHED ();
 }
-
 
 /* Waits for thread TID to die and returns its exit status.  If
  * it was terminated by the kernel (i.e. killed due to an
@@ -199,11 +259,20 @@ process_exec (void *f_name) {
  *
  * This function will be implemented in problem 2-2.  For now, it
  * does nothing. */
+// int
+// process_wait (tid_t child_tid UNUSED) {
+// 	/* XXX: Hint) The pintos exit if process_wait (initd), we recommend you
+// 	 * XXX:       to add infinite loop here before
+// 	 * XXX:       implementing the process_wait. */
+// 	return -1;
+// }
+
 int
 process_wait (tid_t child_tid UNUSED) {
-	/* XXX: Hint) The pintos exit if process_wait (initd), we recommend you
-	 * XXX:       to add infinite loop here before
-	 * XXX:       implementing the process_wait. */
+	/* 임시로 무한 루프 추가 */
+	while (1) {
+		thread_yield();
+	}
 	return -1;
 }
 
