@@ -279,13 +279,22 @@ process_wait (tid_t child_tid UNUSED) {
 /* Exit the process. This function is called by thread_exit (). */
 void
 process_exit (void) {
-	struct thread *curr = thread_current ();
-	/* TODO: Your code goes here.
-	 * TODO: Implement process termination message (see
-	 * TODO: project2/process_termination.html).
-	 * TODO: We recommend you to implement process resource cleanup here. */
-
-	process_cleanup ();
+    struct thread *curr = thread_current();
+    
+    /* 열린 파일들 모두 닫기 */
+    for (int fd = 2; fd < 128; fd++) {
+        if (curr->fd_table[fd] != NULL) {
+            file_close(curr->fd_table[fd]);
+        }
+    }
+    
+    /* 실행 파일 닫기 */
+    if (curr->exec_file != NULL) {
+        file_allow_write(curr->exec_file);
+        file_close(curr->exec_file);
+    }
+    
+    process_cleanup();
 }
 
 /* Free the current process's resources. */

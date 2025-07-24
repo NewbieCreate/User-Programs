@@ -99,6 +99,13 @@ struct thread {
 	/* Owned by userprog/process.c. */
 	uint64_t *pml4;                     /* Page map level 4 */
 	int exit_code;                     /* Exit code for the thread. */
+
+	/* File descriptor table - 추가 */
+    struct file *fd_table[128];         /* File descriptor table */
+    int next_fd;                        /* 다음 할당할 fd 번호 (2부터 시작) */
+    struct file *exec_file;             /* 실행 중인 파일 (write 방지용) */
+
+	
 #endif
 #ifdef VM
 	/* Table for whole virtual memory owned by thread. */
