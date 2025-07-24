@@ -302,23 +302,61 @@ process_exec (void *f_name) {
 
 int
 process_wait (tid_t child_tid UNUSED) {
-	/* 임시로 무한 루프 추가 */
-	while (1) {
-		
+	/* 현재스레드 호출  */
+	struct thread *cur = thread_current();
+		/* 자식 리스트에서 tid에 해당되는 자식구조찾기 */
+	struct child_info *child = NULL;
+	for(struct list_elem *e = list_begin(&cur->child_list); e != list_end(&cur->child_list); e = list_next(e))
+	{
+		child = list_entry(e, struct child_info, elem);
+		if(child->tid == child_tid)
+		{
+			break;
+		}
 	}
-	return -1;
+	if(child == NULL)
+	{
+		return -1; //자식 아님 or 잘못된 tid
+	}
+	if(child->is_waited)
+	{
+		return -1; //이미 기다리고 있음
+	}
+	child->is_waited = true;
+
+	if(!child->has_exited)
+	{
+		sema_down(&child->wait_sema); // 자식이 죽을때까지 block
+	}
+
+	int status = child->exit_status;
+	list_remove(&child->elem);
+	palloc_free_page(child);
+	return status;
 }
 
 /* Exit the process. This function is called by thread_exit (). */
-void
-process_exit (void) {
-	struct thread *curr = thread_current ();
-	/* TODO: Your code goes here.
-	 * TODO: Implement process termination message (see
-	 * TODO: project2/process_termination.html).
-	 * TODO: We recommend you to implement process resource cleanup here. */
+/* Exit the process. This function is called by thread_exit (). */
+void process_exit(void) {
+    struct thread *cur = thread_current(); /* 현재 스레드 불러오기 */
+	struct thread *parent = cur->parent;
 
-	process_cleanup ();
+	if(parent != NULL)
+	{
+		for(struct list_elem *e = list_begin(&parent->child_list); e != list_end(&parent->child_list); e = list_next(e))
+		{
+			struct child_info *child = list_entry(e, struct child_info, elem);
+			if (child->tid == cur->tid)
+			{
+				child->exit_status = cur->exit_status; 
+				child->has_exited = true;
+				sema_up(&child->wait_sema);
+				break;
+			}
+		}
+	}
+	process_cleanup();
+	thread_exit();
 }
 
 /* Free the current process's resources. */

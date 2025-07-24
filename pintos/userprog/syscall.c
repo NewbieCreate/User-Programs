@@ -105,6 +105,30 @@ syscall_handler (struct intr_frame *f UNUSED) {
 		case SYS_EXIT:
     		exit((int)f->R.rdi);
     		break;
+
+        	case SYS_READ:
+            {
+                    int fd = (int)f->R.rdi;
+                    uint8_t *buffer = (uint8_t *)f->R.rsi;
+                    unsigned size = (unsigned)f->R.rdx;
+                    if (fd == 0) { // stdin
+                        // 유저 주소 유효성 검사 (앞, 뒤 포인터 모두)
+                        if (!is_user_vaddr(buffer) || !is_user_vaddr(buffer + size - 1)) {
+                            f->R.rax = -1;
+                            return;
+                        }
+                        for (unsigned i = 0; i < size; i++) {
+                            char c = input_getc();
+                            if (!put_user(buffer + i, c)) {
+                                f->R.rax = -1;
+                                return;
+                            }
+                        }
+                        f->R.rax = size;
+                    }
+                break;
+            }
+
 			
 		case SYS_WRITE:
 			{
@@ -127,6 +151,14 @@ syscall_handler (struct intr_frame *f UNUSED) {
                 f->R.rax = process_fork(thread_name, f);  // f를 직접 전달
             }
             break;
+
+        case SYS_WAIT:
+            {
+                tid_t child_pid = f->R.rdi;
+                f->R.rax = process_wait(child_pid);
+                break;
+            }
+
 		
 		default:
 			printf("Unimplemented system call: %lld\n", f->R.rax);

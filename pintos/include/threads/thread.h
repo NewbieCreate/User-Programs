@@ -96,11 +96,17 @@ struct thread {
 	char name[16];                      /* Name (for debugging purposes). */
 	int priority;                       /* Priority. */
 
+	bool exited;
+	int exit_status;
+
+
 	/* Shared between thread.c and synch.c. */
 	struct list_elem elem;              /* List element. */
 
 	struct semaphore fork_sema;
 	struct file *fd_table[FD_MAX];
+	struct thread *parent;
+	struct list child_list;
 
 #ifdef USERPROG
 	/* Owned by userprog/process.c. */
@@ -114,6 +120,20 @@ struct thread {
 	/* Owned by thread.c. */
 	struct intr_frame tf;               /* Information for switching */
 	unsigned magic;                     /* Detects stack overflow. */
+};
+
+
+
+
+
+struct child_info
+{
+	tid_t tid;
+	int exit_status;
+	bool has_exited;
+	bool is_waited;
+	struct semaphore wait_sema;
+	struct list_elem elem;
 };
 
 /* If false (default), use round-robin scheduler.
