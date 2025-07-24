@@ -120,6 +120,13 @@ syscall_handler (struct intr_frame *f UNUSED) {
 				}
 			}
 			break;
+        
+        case SYS_FORK:
+            {
+                const char *thread_name = (const char *)f->R.rdi;
+                f->R.rax = process_fork(thread_name, f);  // f를 직접 전달
+            }
+            break;
 		
 		default:
 			printf("Unimplemented system call: %lld\n", f->R.rax);
