@@ -116,45 +116,56 @@ kill (struct intr_frame *f) {
    can find more information about both of these in the
    description of "Interrupt 14--Page Fault Exception (#PF)" in
    [IA32-v3a] section 5.15 "Exception and Interrupt Reference". */
+/* Page fault handler. */
 static void
 page_fault (struct intr_frame *f) {
-	bool not_present;  /* True: not-present page, false: writing r/o page. */
-	bool write;        /* True: access was write, false: access was read. */
-	bool user;         /* True: access by user, false: access by kernel. */
-	void *fault_addr;  /* Fault address. */
+    bool not_present;  /* True: not-present page, false: writing r/o page. */
+    bool write;        /* True: access was write, false: access was read. */
+    bool user;         /* True: access by user, false: access by kernel. */
+    void *fault_addr;  /* Fault address. */
 
-	/* Obtain faulting address, the virtual address that was
-	   accessed to cause the fault.  It may point to code or to
-	   data.  It is not necessarily the address of the instruction
-	   that caused the fault (that's f->rip). */
+    /* Obtain faulting address, the virtual address that was
+       accessed to cause the fault.  It may point to code or to
+       data.  It is not necessarily the address of the instruction
+       that caused the fault (that's f->rip). */
+    fault_addr = (void *) rcr2();
 
-	fault_addr = (void *) rcr2();
+    /* Turn interrupts back on (they were only off so that we could
+       be assured of reading CR2 before it changed). */
+    intr_enable ();
 
-	/* Turn interrupts back on (they were only off so that we could
-	   be assured of reading CR2 before it changed). */
-	intr_enable ();
-
-
-	/* Determine cause. */
-	not_present = (f->error_code & PF_P) == 0;
-	write = (f->error_code & PF_W) != 0;
-	user = (f->error_code & PF_U) != 0;
+    /* Determine cause. */
+    not_present = (f->error_code & PF_P) == 0;
+    write = (f->error_code & PF_W) != 0;
+    user = (f->error_code & PF_U) != 0;
 
 #ifdef VM
-	/* For project 3 and later. */
-	if (vm_try_handle_fault (f, fault_addr, user, write, not_present))
-		return;
+    /* For project 3 and later. */
+    if (vm_try_handle_fault (f, fault_addr, user, write, not_present))
+        return;
 #endif
 
-	/* Count page faults. */
-	page_fault_cnt++;
+    /* Count page faults. */
+    page_fault_cnt++;
 
-	/* If the fault is true fault, show info and exit. */
-	printf ("Page fault at %p: %s error %s page in %s context.\n",
-			fault_addr,
-			not_present ? "not present" : "rights violation",
-			write ? "writing" : "reading",
-			user ? "user" : "kernel");
-	kill (f);
+    /* --- 여기서부터 로직을 변경합니다 --- */
+
+    // 유저 모드에서 발생한 페이지 폴트인지 확인합니다.
+    if (user) {
+        // 종료 코드를 -1로 설정하고, 테스트가 요구하는 메시지를 출력한 후,
+        // 스레드를 정상적으로 종료시킵니다.
+        thread_current()->exit_code = -1;
+        printf("%s: exit(%d)\n", thread_current()->name, -1);
+        thread_exit ();
+    } else {
+        // 커널 모드에서 발생한 페이지 폴트는 심각한 버그입니다.
+        // 기존과 같이 예외 정보를 출력하고 커널을 패닉 상태로 만듭니다.
+        printf ("Page fault at %p: %s error %s page in %s context.\n",
+                fault_addr,
+                not_present ? "not present" : "rights violation",
+                write ? "writing" : "reading",
+                user ? "user" : "kernel");
+        kill (f);
+    }
 }
 
