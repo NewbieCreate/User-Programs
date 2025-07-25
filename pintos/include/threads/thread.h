@@ -5,6 +5,7 @@
 #include <list.h>
 #include <stdint.h>
 #include "threads/interrupt.h"
+#include "threads/synch.h"
 #ifdef VM
 #include "vm/vm.h"
 #endif
@@ -104,6 +105,17 @@ struct thread {
     struct file *fd_table[128];         /* File descriptor table */
     int next_fd;                        /* 다음 할당할 fd 번호 (2부터 시작) */
     struct file *exec_file;             /* 실행 중인 파일 (write 방지용) */
+
+	/* ADDED: Process hierarchy and synchronization */
+    struct thread *parent;              /* 부모 프로세스 */
+    struct list children;               /* 자식 프로세스 리스트 */
+    struct list_elem child_elem;        /* 부모의 children 리스트에 연결될 때 사용 */
+    
+    struct semaphore wait_sema;         /* wait() 동기화용 세마포어 */
+    struct semaphore exit_sema;         /* 프로세스 종료 동기화용 */
+    
+    bool waited;                        /* 부모가 이미 wait했는지 */
+    bool exited;                        /* 프로세스가 종료되었는지 */
 
 	
 #endif

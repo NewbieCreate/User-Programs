@@ -15,7 +15,7 @@
 #include "userprog/process.h"
 #include "filesys/filesys.h" // ADDED: filesys_create, filesys_remove
 #include "filesys/file.h"    // ADDED: file operations
-#include "devices/input.h"  // input_getc() 사용
+#include "devices/input.h"   // input_getc() 사용
 
 void syscall_entry(void);
 void syscall_handler(struct intr_frame *);
@@ -149,6 +149,14 @@ void syscall_handler(struct intr_frame *f)
         thread_current()->exit_code = status;
         printf("%s: exit(%d)\n", thread_current()->name, status);
         thread_exit();
+    }
+    break;
+
+        // userprog/syscall.c
+    case SYS_WAIT:
+    {
+        tid_t pid = (tid_t)f->R.rdi;
+        f->R.rax = process_wait(pid);
     }
     break;
 
