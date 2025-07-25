@@ -81,6 +81,7 @@ close_fd(int fd)
 static void exit_with_error(void)
 {
     thread_current()->exit_code = -1;
+    printf("%s: exit(-1)\n", thread_current()->name); // 이 부분 추가!
     thread_exit();
 }
 
@@ -88,7 +89,21 @@ static void
 validate_user_address(const void *uaddr)
 {
     struct thread *curr = thread_current();
-    if (uaddr == NULL || !is_user_vaddr(uaddr) || pml4_get_page(curr->pml4, uaddr) == NULL)
+
+    // NULL 체크 추가
+    if (uaddr == NULL)
+    {
+        exit_with_error();
+    }
+
+    // 커널 영역 체크
+    if (!is_user_vaddr(uaddr))
+    {
+        exit_with_error();
+    }
+
+    // 매핑되지 않은 주소 체크
+    if (pml4_get_page(curr->pml4, uaddr) == NULL)
     {
         exit_with_error();
     }
@@ -97,24 +112,41 @@ validate_user_address(const void *uaddr)
 static void
 validate_user_buffer(const void *ubuffer, unsigned size)
 {
+    if (ubuffer == NULL && size > 0)
+    {
+        exit_with_error();
+    }
+
+    const char *buf = (const char *)ubuffer;
     for (unsigned i = 0; i < size; i++)
     {
-        validate_user_address((const char *)ubuffer + i);
+        // 페이지 경계를 넘을 때마다 체크
+        if ((((uintptr_t)buf + i) & PGMASK) == 0 || i == 0)
+        {
+            validate_user_address(buf + i);
+        }
     }
 }
 
 static void
 validate_user_string(const char *ustr)
 {
+    // NULL 체크를 가장 먼저
+    if (ustr == NULL) {
+        exit_with_error();
+        return;  // 혹시 모르니 return 추가
+    }
+    
+    // 유효한 주소인지 체크
     validate_user_address(ustr);
-    while (true)
-    {
-        if (*ustr == '\0')
-        {
+    
+    // 문자열의 각 문자 체크
+    while (true) {
+        validate_user_address(ustr);
+        if (*ustr == '\0') {
             break;
         }
         ustr++;
-        validate_user_address(ustr);
     }
 }
 
