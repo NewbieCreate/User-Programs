@@ -5,6 +5,7 @@
 #include <list.h>
 #include <stdint.h>
 #include "threads/interrupt.h"
+#include "threads/synch.h"
 #ifdef VM
 #include "vm/vm.h"
 #endif
@@ -85,12 +86,31 @@ typedef int tid_t;
  * only because they are mutually exclusive: only a thread in the
  * ready state is on the run queue, whereas only a thread in the
  * blocked state is on a semaphore wait list. */
-struct thread {
+#define FDT_PAGES 3
+#define FDCOUNT_LIMIT FDT_PAGES *(1<<9)
+
+ struct thread {
 	/* Owned by thread.c. */
 	tid_t tid;                          /* Thread identifier. */
 	enum thread_status status;          /* Thread state. */
 	char name[16];                      /* Name (for debugging purposes). */
 	int priority;                       /* Priority. */
+
+
+	/*파일 디스크럽터 함수*/
+	struct file **fd_table;
+	int fd_idx;
+
+	/*포크 세마포어*/
+	struct semaphore fork_sema;
+	struct semaphore wait_sema;
+	struct semaphore free_sema;
+
+	/* 포크 함수 */
+	struct intr_frame parent_if;
+	struct list child_list;
+	struct list_elem child_elem;
+	struct file *running;
 
 	/* Shared between thread.c and synch.c. */
 	struct list_elem elem;              /* List element. */
@@ -103,12 +123,20 @@ struct thread {
 	/* Table for whole virtual memory owned by thread. */
 	struct supplemental_page_table spt;
 #endif
-
-	/* Owned by thread.c. */
+/* Owned by thread.c. */
 	struct intr_frame tf;               /* Information for switching */
 	unsigned magic;                     /* Detects stack overflow. */
+	int64_t wakeup_tick; // 슬립 쓰레드 시간되면 깨우는 틱
+	int origin_priority; // 실제 오리진 우선순위
+	struct lock *wait_on_lock; // 대기중인 락
+	struct list donations; // 이 쓰레드에 우선순위를 기부하는 쓰레드들의 리스트
+	struct list_elem d_elem; // donations리스트의 elem
+	struct list_elem allelem; // all_list에 저장될 elem
+	int nice; // 다른 쓰레드들에게 얼마나 양보를 해주는지 나타내는 변수 -20 ~ 20 을 가짐 음수이면 우선순위가 높아짐 양수이면 우선순위가 낮아짐
+	/* real recent_cpu */; // 이 쓰레드가 최근에 cpu를 얼마나 사용했는지 나타내는 변수 현재 쓰레드가 많이 running할 수록 값이 낮아짐
+	int exit_status;
+    struct file *executable;            /* 실행 중인 파일 */
 };
-
 /* If false (default), use round-robin scheduler.
    If true, use multi-level feedback queue scheduler.
    Controlled by kernel command-line option "-o mlfqs". */

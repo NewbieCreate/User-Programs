@@ -182,6 +182,7 @@ thread_create (const char *name, int priority,
 	struct thread *t;
 	tid_t tid;
 
+
 	ASSERT (function != NULL);
 
 	/* Allocate thread. */
@@ -203,6 +204,20 @@ thread_create (const char *name, int priority,
 	t->tf.ss = SEL_KDSEG;
 	t->tf.cs = SEL_KCSEG;
 	t->tf.eflags = FLAG_IF;
+	
+	t->fd_table = palloc_get_multiple(PAL_ZERO, FDT_PAGES);
+	if(t->fd_table == NULL)
+	{
+		return TID_ERROR;
+	}
+	t->exit_status = 0;
+
+	t->fd_idx = 3;
+	t->fd_table[0] = 0;
+	t->fd_table[1] = 1;
+	t->fd_table[2] = 2;
+
+	list_push_back(&thread_current()->child_list, &t->child_elem);
 
 	/* Add to run queue. */
 	thread_unblock (t);
@@ -409,6 +424,15 @@ init_thread (struct thread *t, const char *name, int priority) {
 	t->tf.rsp = (uint64_t) t + PGSIZE - sizeof (void *);
 	t->priority = priority;
 	t->magic = THREAD_MAGIC;
+
+	t->exit_status = 0;
+	t->running = NULL;
+
+	sema_init(&t->wait_sema, 0);
+	sema_init(&t->fork_sema, 0);
+	sema_init(&t->free_sema, 0);
+
+	list_init(&t->child_list);
 }
 
 /* Chooses and returns the next thread to be scheduled.  Should
