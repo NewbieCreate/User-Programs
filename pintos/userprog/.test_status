@@ -1,0 +1,3 @@
+args-none PASS
+read-boundary FAIL
+halt PASS
