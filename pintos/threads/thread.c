@@ -257,33 +257,29 @@ thread_create (const char *name, int priority,
 		thread_func *function, void *aux) {
 	struct thread *t;
 	tid_t tid;
-
-
+ 
 	ASSERT (function != NULL);
-
+ 
 	/* Allocate thread. */
 	t = palloc_get_page (PAL_ZERO);
 	if (t == NULL)
 		return TID_ERROR;
-	struct thread *cur = thread_current();
-
+	struct thread *curr = thread_current();
+ 
 	/* Initialize thread. */
 	init_thread (t, name, priority);
 	tid = t->tid = allocate_tid ();
-
-	
-	#ifdef USERPROG
-	/* 파일 디스크립터 초기화 */
+ 
+#ifdef USERPROG
+	/* 파일 디스크립터 리스트 초기화 */
 	list_init(&t->fd_list);
-	t->last_created_fd = 3;
-
-	for(int i = 0; i < 3; i++)
-	{
+	t->last_created_fd = 3; // stdin(0), stdout(1), stderr(2) 이후부터 할당
+	
+	for (int i = 0; i < 3; i++) {
 		struct file_descriptor *fd_entry = malloc(sizeof(struct file_descriptor));
-		if(fd_entry == NULL)
-		{
-			while(!list_empty(&t->fd_list))
-			{
+		if (fd_entry == NULL) {
+			/* 이전에 할당된 fd_entry들 해제 */
+			while (!list_empty(&t->fd_list)) {
 				struct list_elem *e = list_pop_front(&t->fd_list);
 				struct file_descriptor *cleanup_fd = list_entry(e, struct file_descriptor, fd_elem);
 				free(cleanup_fd);
@@ -291,15 +287,15 @@ thread_create (const char *name, int priority,
 			palloc_free_page(t);
 			return TID_ERROR;
 		}
-
+ 
 		fd_entry->fd = i;
-		fd_entry->file_p = NULL;
+		fd_entry->file_p = NULL;  // 실제 파일이 없으므로 NULL
 		list_push_back(&t->fd_list, &fd_entry->fd_elem);
 	}
 	t->exit_status = 0;
-	list_push_back(&cur->child_list,&t->child_list);
-
-	#endif
+	list_push_back(&curr->child_list, &t->child_elem);
+ 
+#endif
 
 	/* Call the kernel_thread if it scheduled.
 	 * Note) rdi is 1st argument, and rsi is 2nd argument. */
@@ -317,14 +313,6 @@ thread_create (const char *name, int priority,
 	{
 		return TID_ERROR;
 	}
-	t->exit_status = 0;
-
-	t->fd_idx = 3;
-	t->fd_table[0] = 0;
-	t->fd_table[1] = 1;
-	t->fd_table[2] = 2;
-
-	list_push_back(&thread_current()->child_list, &t->child_elem);
 
 	/* Add to run queue. */
 	thread_unblock (t);

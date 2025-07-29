@@ -274,15 +274,9 @@ syscall_handler (struct intr_frame *f UNUSED) {
 
 void check_address(const void *addr)
 {
-	struct thread *t = thread_current();
-
-	/*포인터가 가리키는 주소가 유저영역의 주소인지 확인 
-	|| 포인터가 가리키는 주소가 유저 영역 내에 있지만 
-	페이지로 할당하지 않은 영역일수도 잇으니 체크*/
-
-	if(!is_user_vaddr(addr) || addr == NULL || pml4_get_page(t->pml4, addr) == NULL)
+	if(is_kernel_vaddr(addr) || addr == NULL || pml4_get_page(thread_current()->pml4, addr) == NULL)
 	{
-		exit(-1); /* 잘못 접근 했을 경우 프로세스 종료 */
+		exit(-1);
 	}
 }
 

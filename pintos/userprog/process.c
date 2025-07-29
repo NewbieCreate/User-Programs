@@ -64,22 +64,29 @@ struct thread *get_child_with_pid(int pid)
  * before process_create_initd() returns. Returns the initd's
  * thread id, or TID_ERROR if the thread cannot be created.
  * Notice that THIS SHOULD BE CALLED ONCE. */
-tid_t process_create_initd (const char *file_name) { // process_execute()
+/* Starts the first userland program, called "initd", loaded from FILE_NAME.
+ * The new thread may be scheduled (and may even exit)
+ * before process_create_initd() returns. Returns the initd's
+ * thread id, or TID_ERROR if the thread cannot be created.
+ * Notice that THIS SHOULD BE CALLED ONCE. */
+tid_t
+process_create_initd (const char *file_name) {
 	char *fn_copy;
 	tid_t tid;
-
+ 
 	/* Make a copy of FILE_NAME.
 	 * Otherwise there's a race between the caller and load(). */
 	fn_copy = palloc_get_page (0);
 	if (fn_copy == NULL)
 		return TID_ERROR;
 	strlcpy (fn_copy, file_name, PGSIZE);
-
-	char *save_ptr; // strtok_r 함수 실행을 위한 잠깐의 임시 포인터 변수
-	strtok_r(file_name, " ", &save_ptr); // file_name을 공백문자마다" "을 "\0" 삽입
-
+ 
+	// Argument Passing ~
+        char *save_ptr;
+        strtok_r(file_name, " ", &save_ptr);
+        // ~ Argument Passing
+ 
 	/* Create a new thread to execute FILE_NAME. */
-    /* 널 종단자가 공백마다 삽입됐으니까 file_name으로 접근하면 첫번째 단어만 입력됨 */
 	tid = thread_create (file_name, PRI_DEFAULT, initd, fn_copy);
 	if (tid == TID_ERROR)
 		palloc_free_page (fn_copy);
@@ -250,46 +257,78 @@ __do_fork (void *aux) {
 	 exit(TID_ERROR);
 }
 
+void argument_stack(char **argv, int argc, struct intr_frame *if_){
+	char *arg_addr[100];
+    int argv_len;
+ 
+    for (int i = argc - 1; i >= 0; i--) {
+        argv_len = strlen(argv[i]) + 1;
+        if_->rsp -= argv_len;
+        memcpy(if_->rsp, argv[i], argv_len);
+        arg_addr[i] = if_->rsp;
+    }
+ 
+    while (if_->rsp % 8)
+        *(uint8_t *)(--if_->rsp) = 0;
+ 
+    if_->rsp -= 8;
+    memset(if_->rsp, 0, sizeof(char *));
+ 
+    for (int i = argc - 1; i >= 0; i--) {
+        if_->rsp -= 8;
+        memcpy(if_->rsp, &arg_addr[i], sizeof(char *));
+    }
+ 
+    if_->rsp = if_->rsp - 8;
+    memset(if_->rsp, 0, sizeof(void *));
+ 
+    if_->R.rdi = argc;
+    if_->R.rsi = if_->rsp + 8;
+}
+
+/* Switch the current execution context to the f_name.
+ * Returns -1 on fail. */
+/* Switch the current execution context to the f_name.
+ * Returns -1 on fail. */
 /* Switch the current execution context to the f_name.
  * Returns -1 on fail. */
 int
 process_exec (void *f_name) {
 	char *file_name = f_name;
 	bool success;
-
+ 
 	/* We cannot use the intr_frame in the thread structure.
 	 * This is because when current thread rescheduled,
 	 * it stores the execution information to the member. */
-	/* 스레드 구조체 내의 intr_frame을 사용할 수 없습니다.
-	 * 현재 스레드가 재스케줄링될 때, 실행 정보를 멤버에 저장하기 때문입니다. */
 	struct intr_frame _if;
 	_if.ds = _if.es = _if.ss = SEL_UDSEG;
 	_if.cs = SEL_UCSEG;
 	_if.eflags = FLAG_IF | FLAG_MBS;
-
+ 
 	/* We first kill the current context */
-	/* 먼저 현재 컨텍스트를 종료합니다. */
 	process_cleanup ();
-
+ 
+	char *ptr, *arg;
+    int arg_cnt = 0;
+    char *arg_list[64];
+ 
+    for (arg = strtok_r(file_name, " ", &ptr); arg != NULL; arg = strtok_r(NULL, " ", &ptr))
+        arg_list[arg_cnt++] = arg;
+ 
 	/* And then load the binary */
-	/* 그런 다음 바이너리를 로드합니다. */
 	success = load (file_name, &_if);
-
 	/* If load failed, quit. */
-	/* 로드에 실패하면 종료합니다. */
 	if (!success)
 		return -1;
-
+ 
+	argument_stack(arg_list, arg_cnt, &_if);
+ 
 	palloc_free_page (file_name);
-	//메모리 디버깅용
-	// hex_dump(_if.rsp, _if.rsp, USER_STACK - _if.rsp, true);
-
+	
 	/* Start switched process. */
-	/* 전환된 프로세스를 시작합니다. */
 	do_iret (&_if);
 	NOT_REACHED ();
 }
-
 
 /* Waits for thread TID to die and returns its exit status.  If
  * it was terminated by the kernel (i.e. killed due to an
@@ -323,25 +362,21 @@ process_wait (tid_t child_tid UNUSED) {
 /* Exit the process. This function is called by thread_exit (). */
 void
 process_exit (void) {
-	struct thread *cur = thread_current ();
+	struct thread *curr = thread_current ();
 	/* TODO: Your code goes here.
 	 * TODO: Implement process termination message (see
 	 * TODO: project2/process_termination.html).
 	 * TODO: We recommend you to implement process resource cleanup here. */
-
-	// P2-4 Close all opened files
-	for(int fd = 0; fd < cur->fd_idx; fd++){
-		close(fd);
-	}
-
-	file_close(cur->running);
-
-	palloc_free_multiple(cur->fd_table, FDT_PAGES);
-
-	process_cleanup();
-
-	sema_up(&cur->wait_sema);
-	sema_down(&cur->free_sema);
+ 
+	remove_all_fd(curr);
+ 
+    if (curr->running != NULL)
+        file_close(curr->running);
+ 
+    process_cleanup();
+ 
+    sema_up(&curr->wait_sema);      // wait() 중인 부모를 깨운다
+    sema_down(&curr->free_sema);    // 부모가 정리할 때까지 대기 (메모리 해제)
 }
 
 /* Free the current process's resources. */
@@ -445,33 +480,151 @@ static bool load_segment (struct file *file, off_t ofs, uint8_t *upage,
  * Stores the executable's entry point into *RIP
  * and its initial stack pointer into *RSP.
  * Returns true if successful, false otherwise. */
-static bool load (const char *file_name, struct intr_frame *if_) {
+// static bool load (const char *file_name, struct intr_frame *if_) {
+// 	struct thread *t = thread_current ();
+// 	struct ELF ehdr;
+// 	struct file *file = NULL;
+// 	off_t file_ofs;
+// 	bool success = false;
+// 	int i;
+
+// 	/* Allocate and activate page directory. */
+// 	/* 페이지 디렉토리를 할당하고 활성화합니다. */
+// 	t->pml4 = pml4_create ();
+// 	if (t->pml4 == NULL)
+// 		goto done;
+// 	process_activate (thread_current ());
+	
+// 	char *argv[128]; // 한페이지가 4KB 대충 이정도까지는 들어갈수 있는정도? 
+// 	int argc = 0; // 인자의 갯수
+
+// 	// file_name에서 인자들을 parsing
+// 	parsing_file_name(file_name, &argc, argv);
+
+// 	/* Open executable file. */
+// 	file = filesys_open (file_name);
+// 	if (file == NULL) {
+// 		goto done;
+// 	}
+
+// 	/* Read and verify executable header. */
+// 	if (file_read (file, &ehdr, sizeof ehdr) != sizeof ehdr
+// 			|| memcmp (ehdr.e_ident, "\177ELF\2\1\1", 7)
+// 			|| ehdr.e_type != 2
+// 			|| ehdr.e_machine != 0x3E // amd64
+// 			|| ehdr.e_version != 1
+// 			|| ehdr.e_phentsize != sizeof (struct Phdr)
+// 			|| ehdr.e_phnum > 1024) {
+// 		goto done;
+// 	}
+
+// 	/* Read program headers. */
+// 	file_ofs = ehdr.e_phoff;
+// 	for (i = 0; i < ehdr.e_phnum; i++) {
+// 		struct Phdr phdr;
+
+// 		if (file_ofs < 0 || file_ofs > file_length (file))
+// 			goto done;
+// 		file_seek (file, file_ofs);
+
+// 		if (file_read (file, &phdr, sizeof phdr) != sizeof phdr)
+// 			goto done;
+// 		file_ofs += sizeof phdr;
+// 		switch (phdr.p_type) {
+// 			case PT_NULL:
+// 			case PT_NOTE:
+// 			case PT_PHDR:
+// 			case PT_STACK:
+// 			default:
+// 				/* Ignore this segment. */
+// 				break;
+// 			case PT_DYNAMIC:
+// 			case PT_INTERP:
+// 			case PT_SHLIB:
+// 				goto done;
+// 			case PT_LOAD:
+// 				if (validate_segment (&phdr, file)) {
+// 					bool writable = (phdr.p_flags & PF_W) != 0;
+// 					uint64_t file_page = phdr.p_offset & ~PGMASK;
+// 					uint64_t mem_page = phdr.p_vaddr & ~PGMASK;
+// 					uint64_t page_offset = phdr.p_vaddr & PGMASK;
+// 					uint32_t read_bytes, zero_bytes;
+// 					if (phdr.p_filesz > 0) {
+// 						/* Normal segment.
+// 						 * Read initial part from disk and zero the rest. */
+// 						read_bytes = page_offset + phdr.p_filesz;
+// 						zero_bytes = (ROUND_UP (page_offset + phdr.p_memsz, PGSIZE)
+// 								- read_bytes);
+// 					} else {
+// 						/* Entirely zero.
+// 						 * Don't read anything from disk. */
+// 						read_bytes = 0;
+// 						zero_bytes = ROUND_UP (page_offset + phdr.p_memsz, PGSIZE);
+// 					}
+// 					if (!load_segment (file, file_page, (void *) mem_page,
+// 								read_bytes, zero_bytes, writable))
+// 						goto done;
+// 				}
+// 				else
+// 					goto done;
+// 				break;
+// 		}
+// 	}
+
+// /* Set up stack. */
+// 	/* 사용자 스택 초기화 */
+// 	if (!setup_stack (if_))
+// 		goto done;
+
+// 	/* Start address. */
+// 	/* 시작 주소 */
+// 	if_->rip = ehdr.e_entry;
+
+// 	/* TODO: Your code goes here.
+// 	 * TODO: Implement argument passing (see project2/argument_passing.html). */
+// 	 /* TODO: 여기에 코드를 작성하세요. 
+// 	  * TODO: 인자 전달을 구현합니다 (project2/argument_passing.html 참조). */
+      
+// 	argument_passing_user_stack(argc, argv, if_);
+
+// 	success = true;
+
+// done:
+// 	/* We arrive here whether the load is successful or not. */
+// 	/* 로드가 성공했든 실패했든 여기에 도착합니다. */
+// 	file_close (file);
+// 	for (int i = 0; i < argc; i++) {
+// 	if (argv[i]) palloc_free_page(argv[i]);
+// }
+// 	return success;
+// }
+
+/* Loads an ELF executable from FILE_NAME into the current thread.
+ * Stores the executable's entry point into *RIP
+ * and its initial stack pointer into *RSP.
+ * Returns true if successful, false otherwise. */
+static bool
+load (const char *file_name, struct intr_frame *if_) {
 	struct thread *t = thread_current ();
 	struct ELF ehdr;
 	struct file *file = NULL;
 	off_t file_ofs;
 	bool success = false;
 	int i;
-
+ 
 	/* Allocate and activate page directory. */
-	/* 페이지 디렉토리를 할당하고 활성화합니다. */
 	t->pml4 = pml4_create ();
 	if (t->pml4 == NULL)
 		goto done;
 	process_activate (thread_current ());
-	
-	char *argv[128]; // 한페이지가 4KB 대충 이정도까지는 들어갈수 있는정도? 
-	int argc = 0; // 인자의 갯수
-
-	// file_name에서 인자들을 parsing
-	parsing_file_name(file_name, &argc, argv);
-
+ 
 	/* Open executable file. */
 	file = filesys_open (file_name);
 	if (file == NULL) {
+		printf ("load: %s: open failed\n", file_name);
 		goto done;
 	}
-
+ 
 	/* Read and verify executable header. */
 	if (file_read (file, &ehdr, sizeof ehdr) != sizeof ehdr
 			|| memcmp (ehdr.e_ident, "\177ELF\2\1\1", 7)
@@ -480,18 +633,19 @@ static bool load (const char *file_name, struct intr_frame *if_) {
 			|| ehdr.e_version != 1
 			|| ehdr.e_phentsize != sizeof (struct Phdr)
 			|| ehdr.e_phnum > 1024) {
+		printf ("load: %s: error loading executable\n", file_name);
 		goto done;
 	}
-
+ 
 	/* Read program headers. */
 	file_ofs = ehdr.e_phoff;
 	for (i = 0; i < ehdr.e_phnum; i++) {
 		struct Phdr phdr;
-
+ 
 		if (file_ofs < 0 || file_ofs > file_length (file))
 			goto done;
 		file_seek (file, file_ofs);
-
+ 
 		if (file_read (file, &phdr, sizeof phdr) != sizeof phdr)
 			goto done;
 		file_ofs += sizeof phdr;
@@ -535,32 +689,22 @@ static bool load (const char *file_name, struct intr_frame *if_) {
 				break;
 		}
 	}
-
-/* Set up stack. */
-	/* 사용자 스택 초기화 */
+ 
+	/* Set up stack. */
 	if (!setup_stack (if_))
 		goto done;
-
+ 
 	/* Start address. */
-	/* 시작 주소 */
 	if_->rip = ehdr.e_entry;
-
+ 
 	/* TODO: Your code goes here.
 	 * TODO: Implement argument passing (see project2/argument_passing.html). */
-	 /* TODO: 여기에 코드를 작성하세요. 
-	  * TODO: 인자 전달을 구현합니다 (project2/argument_passing.html 참조). */
-      
-	argument_passing_user_stack(argc, argv, if_);
-
+ 
 	success = true;
-
+ 
 done:
 	/* We arrive here whether the load is successful or not. */
-	/* 로드가 성공했든 실패했든 여기에 도착합니다. */
 	file_close (file);
-	for (int i = 0; i < argc; i++) {
-	if (argv[i]) palloc_free_page(argv[i]);
-}
 	return success;
 }
 
