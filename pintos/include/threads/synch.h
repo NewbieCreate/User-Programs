@@ -4,6 +4,8 @@
 #include <list.h>
 #include <stdbool.h>
 
+struct thread;
+
 /* A counting semaphore. */
 struct semaphore {
 	unsigned value;             /* Current value. */
@@ -22,6 +24,13 @@ struct lock {
 	struct semaphore semaphore; /* Binary semaphore controlling access. */
 };
 
+struct semaphore_elem {
+	struct list_elem elem;              /* List element. */
+	struct semaphore semaphore;         /* Embedded semaphore. */
+};
+
+
+
 void lock_init (struct lock *);
 void lock_acquire (struct lock *);
 bool lock_try_acquire (struct lock *);
@@ -37,6 +46,7 @@ void cond_init (struct condition *);
 void cond_wait (struct condition *, struct lock *);
 void cond_signal (struct condition *, struct lock *);
 void cond_broadcast (struct condition *, struct lock *);
+bool cmp_sem_priority(const struct list_elem *a, const struct list_elem *b, void *aux);
 
 /* Optimization barrier.
  *

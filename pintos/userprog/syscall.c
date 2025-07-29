@@ -60,43 +60,102 @@ put_user (uint8_t *udst, uint8_t byte) {
 
 int add_file_to_fdt(struct file *file)
 {
-	struct thread *cur = thread_current();
-	struct file **fdt = cur->fd_table;
-
-	while(cur->fd_idx < FDCOUNT_LIMIT && fdt[cur->fd_idx])
-	{
-		cur->fd_idx++;
-	}
-
-	if(cur->fd_idx >= FDCOUNT_LIMIT)
+	struct thread *curr = thread_current();
+	/* 1. 리스트 크기 제한검사 */
+	if(list_size(&curr->fd_list) >= FDCOUNT_LIMIT)
 	{
 		return -1;
 	}
 
-	fdt[cur->fd_idx = FDCOUNT_LIMIT] = file;
-	return cur->fd_idx;
+	/* 2. FD 번호 제한검사 */
+	if(curr->last_created_fd >= FDCOUNT_LIMIT)
+	{
+		return -1;
+	}
+
+	/* 파일 디스크립터 구조체 동적할당 */
+	struct file_descriptor *fd_entry = malloc(sizeof(struct file_descriptor));
+	if (fd_entry == NULL)
+	{
+		return -1;
+	}
+
+	fd_entry->fd = curr->last_created_fd++;
+	fd_entry->file_p = file;
+	list_push_back(&curr->fd_list, &fd_entry->fd_elem);
+
+	return fd_entry->fd;
 }
 
 static struct file *find_file_by_fd(int fd)
 {
-	struct thread *cur = thread_current();
-	if (fd<0 || fd >= FDCOUNT_LIMIT)
-	{
-		return NULL;
-	}
-	return cur->fd_table[fd];
+
+   struct thread *curr = thread_current();
+ 
+    if (fd < 0 || fd >= FDCOUNT_LIMIT)
+        return NULL;
+ 
+    struct list_elem *e;
+    for (e = list_begin(&curr->fd_list); e != list_end(&curr->fd_list); e = list_next(e)) {
+        struct file_descriptor *fd_entry = list_entry(e, struct file_descriptor, fd_elem);
+        if (fd_entry->fd == fd)
+            return fd_entry->file_p;
+    }
+ 
+    return NULL;  // 해당 FD를 찾지 못한 경우
 }
 
 void remove_file_from_fdt(int fd)
 {
 	struct thread *cur = thread_current();
-
 	if(fd < 0 || fd >= FDCOUNT_LIMIT)
+	{
+		return -1;
+	}
+
+	struct list_elem *e;
+	for(e = list_begin(&cur->fd_list); e != list_end(&cur->fd_list); e = list_next(e))
+	{
+		struct file_descriptor *fd_entry = list_entry(e, struct file_descriptor, fd_elem);
+		if(fd_entry->fd == fd)
+		{
+			list_remove(&fd_entry->fd_elem);
+			if(fd_entry->file_p != NULL)
+			{
+			file_close(fd_entry->file_p);
+		    }
+			free(fd_entry);
+		    return 0;
+		}
+	}
+
+	return -1;
+}
+
+void remove_all_fd(struct thread *t)
+{
+	if(t == NULL)
 	{
 		return;
 	}
-	cur->fd_table[fd] = NULL;
+
+	while(!list_empty(&t->fd_list))
+	{
+		struct list_elem *e = list_pop_front(&t->fd_list);
+		struct file_descriptor *fd_entry = list_entry(e, struct file_descriptor, fd_elem);
+
+		if(fd_entry != NULL)
+		{
+			if(fd_entry->file_p != NULL)
+			{
+				file_close(fd_entry->file_p);
+				free(fd_entry);
+			}
+		}
+	}
 }
+
+
 
 /* System call.
  *
@@ -190,16 +249,16 @@ syscall_handler (struct intr_frame *f UNUSED) {
 			f->R.rax = write(f->R.rdi, f->R.rsi, f->R.rdx);
 			break;
 		}
-		// case SYS_SEEK :
-		// {
-		// 	seek(f->R.rdi, f->R.rsi);
-		// 	break;
-		// }
-		// case SYS_TELL :
-		// {
-		// 	f->R.rax = tell(f->R.rdi);
-		// 	break;
-		// }
+		case SYS_SEEK :
+		{
+			seek(f->R.rdi, f->R.rsi);
+			break;
+		}
+		case SYS_TELL :
+		{
+			f->R.rax = tell(f->R.rdi);
+			break;
+		}
 		case SYS_CLOSE :
 		{
 			close(f->R.rdi);
@@ -235,38 +294,41 @@ void halt(void){
 void exit(int status){
 	struct thread *cur = thread_current();
     cur->exit_status = status;		// 프로그램이 정상적으로 종료되었는지 확인(정상적 종료 시 0)
-	printf("%s: exit(%d)\n", thread_name(), status);
+	printf("%s: exit(%d)\n", cur->name, cur->exit_status);
  	thread_exit();		// 스레드 종료
 }
 
 int exec(char *file_name)
 {
 	check_address(file_name);
+	
+	off_t size = strlen(file_name)+1;
+	char *cmd_copy = palloc_get_page(PAL_ZERO);
 
-	int file_size = strlen(file_name)+1;
-	char *fn_copy = palloc_get_page(PAL_ZERO);
-	if(fn_copy == NULL)
-	{
-		exit(-1);
-	}
-	strlcpy(fn_copy, file_name, file_size);
-
-	if(process_exec(fn_copy) -1)
+	if(cmd_copy == NULL)
 	{
 		return -1;
 	}
 
-	NOT_REACHED();
+	memcpy(cmd_copy, file_name, size);
+
+	if(process_exec(cmd_copy) == -1)
+	{
+		return -1;
+	}
+
 	return 0;
 }
 
-bool create(const char *file, unsigned initial_size)
+bool 
+create(const char *file, unsigned initial_size)
 {
 	check_address(file);
 	return filesys_create(file, initial_size);
 }
 
-bool remove(const char *file)
+bool 
+remove(const char *file)
 {
 	check_address(file);
 	return filesys_remove(file);
@@ -275,18 +337,22 @@ bool remove(const char *file)
 int open(const char *file)
 {
 	check_address(file);
-	struct file *open_file = filesys_open(file);
 
-	if(open_file == NULL)
+	lock_acquire(&filesys_lock);
+	struct file *newfile = filesys_open(file);
+	lock_release(&filesys_lock);
+
+	if(newfile == NULL)
 	{
 		return -1;
 	}
 
-	int fd = add_file_to_fdt(open_file);
+	int fd = add_file_to_fdt(newfile);
 
 	if(fd == -1)
 	{
-		file_close(open_file);
+		file_close(newfile);
+		return -1;
 	}
 	return fd;
 }
@@ -303,83 +369,113 @@ int filesize(int fd)
 
 tid_t fork(const char *thread_name, struct intr_frame *f)
 {
+	check_address(thread_name);
 	return process_fork(thread_name, f);
 }
 
 int read(int fd, void *buffer, unsigned size)
 {
-	int read_result;
-	struct thread *cur = thread_current();
-	struct file *file_fd = find_file_by_fd(fd);
+	check_address(buffer);
 
-	if(fd == 0)
+	if(fd == 0) //0(stdin) -> 키보드로 직접입력
 	{
-		*(char *)buffer = input_getc();
-		read_result = size;
-	}else
-	{
-		if(find_file_by_fd(fd) == NULL)
+		int i = 0; //쓰레기 값 리턴방지
+		char c;
+		unsigned char *buf = buffer;
+
+		for(; i<size; i++)
 		{
-			return -1;
-		}else
-		{
-			lock_acquire(&filesys_lock);
-			read_result = file_read(find_file_by_fd(fd), buffer, size);
-			lock_release(&filesys_lock);
+			c = input_getc();
+			*buf++ = c;
+			if(c == '\0')
+			{
+				break;
+			}
 		}
-	}
-	return read_result;
 
+		return i;
+	}
+	if(fd < 3) //std, stdrr를 읽으려 할 경우 & fd가 음스일때
+	{
+		return -1;
+	}
+	struct file *file = find_file_by_fd(fd);
+	off_t byte = -1;
+
+	if(file == NULL)
+	{
+		return -1;
+	}
+	lock_acquire(&filesys_lock);
+	byte = file_read(file,buffer,size);
+	lock_release(&filesys_lock);
+	
+	return byte;
 }
 /*  */
 int write(int fd, const void *buffer, unsigned size)
 {
 	check_address(buffer);
-	lock_acquire(&filesys_lock);
-	int write_result;
 
-	if(fd == 1)
+	off_t bytes = -1;
+
+	if(fd <= 0) //쓰려고 하거나 fd가 음수일경우
+	{
+		return -1;
+	}
+
+	if(fd<3) //1(stdout) 2(stderr) -> 콘솔로 출력
 	{
 		putbuf(buffer, size);
-		write_result = size;
-	}else{
-		if (find_file_by_fd(fd) != NULL)
-		{
-			write_result = file_write(find_file_by_fd(fd), buffer, size);
-		}else{
-			write_result = -1;
-		}
+		return size;
 	}
+
+	struct file *file = find_file_by_fd(fd);
+
+	if(file == NULL)
+	{
+		return -1;
+	}
+
+	lock_acquire(&filesys_lock);
+	bytes = file_write(file, buffer, size);
 	lock_release(&filesys_lock);
-	return write_result;
+
+	return bytes;
 }
 
 // /* 파일 위치로 이동하는 함수 */
-// void seek(int fd, unsigned poition)
-// {
-// 	struct file *fileobj = find_file_by_fd(fd);
-// 	if(fileobj <= 2)
-// 	{
-// 		return;
-// 	}
-// 	fileobj->pos = poition;
-// }
+void seek(int fd, unsigned position) 
+{
+    struct file *file = find_file_by_fd(fd);
+ 
+    if (fd < 3 || file == NULL)
+        return;
+ 
+    file_seek(file, position);
+}
 
-// /* 파일 위치을 알려주는 함수 */
-// unsigned tell(int fd)
-// {
-// 	struct file *fileobj = find_file_by_fd(fd);
-// 	if(fileobj <= 2) return;
-// 	return file_tell(fileobj);
-// }
+int tell(int fd)
+{
+	struct file *file = find_file_by_fd(fd);
+
+	if(fd < 3 || file == NULL)
+	{
+		return -1;
+	}
+
+	return file_tell(file);
+}
 
 void close(int fd)
 {
-	struct file *fileobj = find_file_by_fd(fd);
-	if(fileobj == NULL)
+	struct file *file = find_file_by_fd(fd);
+
+	if(fd<3||file==NULL)
 	{
 		return;
 	}
+
 	remove_file_from_fdt(fd);
 }
 

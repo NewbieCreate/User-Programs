@@ -18,6 +18,20 @@
         "filesys.h": "c",
         "file.h": "c",
         "mmu.h": "c",
-        "lib.h": "c"
+        "lib.h": "c",
+        "palloc.h": "c",
+        "intr-stubs.h": "c",
+        "synch.h": "c",
+        "ratio": "c",
+        "system_error": "c",
+        "array": "c",
+        "functional": "c",
+        "tuple": "c",
+        "type_traits": "c",
+        "utility": "c",
+        "stdint.h": "c",
+        "vaddr.h": "c",
+        "string_view": "c",
+        "initializer_list": "c"
     }
 }

@@ -18,6 +18,8 @@
 #include "threads/mmu.h"
 #include "threads/vaddr.h"
 #include "intrinsic.h"
+#include "userprog/syscall.h"
+
 #ifdef VM
 #include "vm/vm.h"
 #endif
@@ -103,7 +105,8 @@ tid_t process_create_initd (const char *file_name) { // process_execute()
 tid_t
 process_fork (const char *name, struct intr_frame *if_) {
 	struct thread *cur = thread_current();
-	memcpy(&cur->parent_if, if_, sizeof(struct intr_frame));
+	struct inter_frame *f = (pg_round_up(rrsp()) - sizeof(struct intr_frame));
+	memcpy(&cur->parent_if, f, sizeof(struct intr_frame));
 	
 	tid_t tid = thread_create(name, PRI_DEFAULT, __do_fork, cur);
 	if(tid == TID_ERROR)
@@ -113,7 +116,7 @@ process_fork (const char *name, struct intr_frame *if_) {
 
 	struct thread *child = get_child_with_pid(tid);
 	sema_down(&child->fork_sema);
-	if(child->exit_status == -1)
+	if(child->exit_status == TID_ERROR)
 	{
 		return TID_ERROR;
 	}
@@ -147,7 +150,7 @@ duplicate_pte (uint64_t *pte, void *va, void *aux) {
 
 	/* 3. TODO: Allocate new PAL_USER page for the child and set result to
 	 *    TODO: NEWPAGE. */
-	newpage = palloc_get_page(PAL_USER);
+	newpage = palloc_get_page(PAL_ZERO);
 	if(newpage == NULL)
 	{
 		return false;
@@ -187,6 +190,7 @@ __do_fork (void *aux) {
 
 	/* 1. Read the cpu context to local stack. */
 	memcpy (&if_, parent_if, sizeof (struct intr_frame));
+	if_.R.rax = 0; //자식프로세스의 리턴값
 
 	/* 2. Duplicate PT */
 	current->pml4 = pml4_create();
@@ -214,39 +218,36 @@ __do_fork (void *aux) {
 		goto error;
 	 }
 
-	 for(int i =0; i<FDCOUNT_LIMIT; i++)
-	 {
-		struct file *file = parent->fd_table[i];
-		if(file == NULL)
-		{
-			continue;
-		}
+	 current->last_created_fd = parent->last_created_fd;
 
-		bool found = false;
-		if(!found)
+	 struct list_elem *e;
+	 for(e = list_begin(&parent->fd_list); e != list_end(&parent->fd_list); e = list_next(e))
+	 {
+		struct file_descriptor *parent_fd = list_entry(e, struct file_descriptor, fd_elem);
+
+		struct file_descriptor *child_fd = malloc(sizeof(struct file_descriptor));
+		if(child_fd == NULL)
 		{
-			struct file *new_file;
-			if(file > 2)
-			{
-				new_file = file_duplicate(file);
-			}else
-			{
-				new_file = file;
-			}
-			current->fd_table[i] = new_file;
+			goto error;
 		}
+		child_fd->fd = parent_fd->fd;
+		child_fd->file_p = parent_fd->file_p ? file_duplicate(parent_fd->file_p) : NULL;
+		if(parent_fd->file_p != NULL && child_fd->file_p == NULL)
+		{
+			free(child_fd);
+			goto error;
+		}
+		list_push_back(&current->fd_list, &child_fd->fd_elem);
 	 }
-	 current->fd_idx = parent->fd_idx;
 
 	 sema_up(&current->fork_sema);
+	 do_iret(&if_);
+	 NOT_REACHED();
 
-	/* Finally, switch to the newly created process. */
-	if (succ)
-		do_iret (&if_);
-error:
-	current->exit_status = TID_ERROR;
-	sema_up(&current->fork_sema);
-	exit(TID_ERROR);
+	 error :
+	 remove_all_fd(current);
+	 sema_up(&current->fork_sema);
+	 exit(TID_ERROR);
 }
 
 /* Switch the current execution context to the f_name.
@@ -276,10 +277,10 @@ process_exec (void *f_name) {
 
 	/* If load failed, quit. */
 	/* 로드에 실패하면 종료합니다. */
-	palloc_free_page (file_name);
 	if (!success)
 		return -1;
 
+	palloc_free_page (file_name);
 	//메모리 디버깅용
 	// hex_dump(_if.rsp, _if.rsp, USER_STACK - _if.rsp, true);
 
@@ -329,22 +330,17 @@ process_exit (void) {
 	 * TODO: We recommend you to implement process resource cleanup here. */
 
 	// P2-4 Close all opened files
-	for (int i = 0; i < FDCOUNT_LIMIT; i++)
-	{
-		close(i);
+	for(int fd = 0; fd < cur->fd_idx; fd++){
+		close(fd);
 	}
-	//palloc_free_page(cur->fdTable);
-	palloc_free_multiple(cur->fd_table, FDT_PAGES); // multi-oom
 
-	// P2-5 Close current executable run by this process
 	file_close(cur->running);
+
+	palloc_free_multiple(cur->fd_table, FDT_PAGES);
 
 	process_cleanup();
 
-	// Wake up blocked parent
 	sema_up(&cur->wait_sema);
-	// Postpone child termination until parents receives its exit status with 'wait'
-	// 부모 프로세스가 sema_up(free_sema)할 때까지 기다림(block 상태 진입)
 	sema_down(&cur->free_sema);
 }
 
@@ -562,14 +558,20 @@ done:
 	/* We arrive here whether the load is successful or not. */
 	/* 로드가 성공했든 실패했든 여기에 도착합니다. */
 	file_close (file);
+	for (int i = 0; i < argc; i++) {
+	if (argv[i]) palloc_free_page(argv[i]);
+}
 	return success;
 }
 
-void parsing_file_name(char *file_name, int *argc,char *argv[]) {
+void parsing_file_name(char *file_name, int *argc, char *argv[]) {
 	char *token, *save_ptr;
 
-	for(token = strtok_r (file_name, " ", &save_ptr); token != NULL; token = strtok_r(NULL, " ", &save_ptr)){
-		argv[(*argc)++] = token;
+	for (token = strtok_r(file_name, " ", &save_ptr); token != NULL; token = strtok_r(NULL, " ", &save_ptr)) {
+		argv[*argc] = palloc_get_page(0);   // 또는 malloc 사용 가능
+		if (argv[*argc] == NULL) break;
+		strlcpy(argv[*argc], token, PGSIZE);
+		(*argc)++;
 	}
 }
 

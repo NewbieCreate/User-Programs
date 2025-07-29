@@ -89,6 +89,13 @@ typedef int tid_t;
 #define FDT_PAGES 3
 #define FDCOUNT_LIMIT FDT_PAGES *(1<<9)
 
+
+struct file_descriptor {
+    int fd;                  /* 할당된 FD 번호 */
+    struct file *file_p;     /* 실제 파일 포인터 */
+    struct list_elem fd_elem;/* fd_list 에 들어갈 elem */
+};
+
  struct thread {
 	/* Owned by thread.c. */
 	tid_t tid;                          /* Thread identifier. */
@@ -96,46 +103,49 @@ typedef int tid_t;
 	char name[16];                      /* Name (for debugging purposes). */
 	int priority;                       /* Priority. */
 
+	unsigned magic;                     /* Detects stack overflow. */
+	
+	/* Shared between thread.c and synch.c. */
+	struct list_elem elem;              /* List element. */
 
-	/*파일 디스크럽터 함수*/
-	struct file **fd_table;
-	int fd_idx;
+	int init_priority;
+	struct list donations;
+	struct list_elem donations_elem;
+	struct lock *wait_on_lock;
+
+#ifdef USERPROG
+	/* Owned by userprog/process.c. */
+	uint64_t *pml4;                     /* Page map level 4 */
+	struct list child_list;
+	/* 포크 함수 */
+	struct list_elem child_elem;
+	struct thread *parent;
+	struct file *running;
+
+	struct intr_frame tf;               /* Information for switching */
+
+	struct intr_frame parent_if;
+	int exit_status;
 
 	/*포크 세마포어*/
 	struct semaphore fork_sema;
 	struct semaphore wait_sema;
 	struct semaphore free_sema;
 
-	/* 포크 함수 */
-	struct intr_frame parent_if;
-	struct list child_list;
-	struct list_elem child_elem;
-	struct file *running;
+	int last_created_fd;
+	struct list fd_list;
 
-	/* Shared between thread.c and synch.c. */
-	struct list_elem elem;              /* List element. */
+	
+	/*파일 디스크럽터 함수*/
+	struct file **fd_table;
+	int fd_idx;
 
-#ifdef USERPROG
-	/* Owned by userprog/process.c. */
-	uint64_t *pml4;                     /* Page map level 4 */
 #endif
 #ifdef VM
 	/* Table for whole virtual memory owned by thread. */
 	struct supplemental_page_table spt;
 #endif
 /* Owned by thread.c. */
-	struct intr_frame tf;               /* Information for switching */
-	unsigned magic;                     /* Detects stack overflow. */
-	int64_t wakeup_tick; // 슬립 쓰레드 시간되면 깨우는 틱
-	int origin_priority; // 실제 오리진 우선순위
-	struct lock *wait_on_lock; // 대기중인 락
-	struct list donations; // 이 쓰레드에 우선순위를 기부하는 쓰레드들의 리스트
-	struct list_elem d_elem; // donations리스트의 elem
-	struct list_elem allelem; // all_list에 저장될 elem
-	int nice; // 다른 쓰레드들에게 얼마나 양보를 해주는지 나타내는 변수 -20 ~ 20 을 가짐 음수이면 우선순위가 높아짐 양수이면 우선순위가 낮아짐
-	/* real recent_cpu */; // 이 쓰레드가 최근에 cpu를 얼마나 사용했는지 나타내는 변수 현재 쓰레드가 많이 running할 수록 값이 낮아짐
-	int exit_status;
-    struct file *executable;            /* 실행 중인 파일 */
 };
 /* If false (default), use round-robin scheduler.
    If true, use multi-level feedback queue scheduler.
@@ -170,5 +180,13 @@ int thread_get_recent_cpu (void);
 int thread_get_load_avg (void);
 
 void do_iret (struct intr_frame *tf);
+
+/* 우선순위 스케줄링 */
+void cmp_nowNfirst (void);
+bool cmp_priority(const struct list_elem *a, const struct list_elem *b, void *aux UNUSED);
+void donation_priority(void);
+void remove_with_lock(struct lock *lock);
+void refresh_priority(void);
+
 
 #endif /* threads/thread.h */

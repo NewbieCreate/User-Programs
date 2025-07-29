@@ -62,6 +62,7 @@ static void init_thread (struct thread *, const char *name, int priority);
 static void do_schedule(int status);
 static void schedule (void);
 static tid_t allocate_tid (void);
+bool cmp_sem_priority(const struct list_elem *a, const struct list_elem *b, void *aux UNUSED);
 
 /* Returns true if T appears to point to a valid thread. */
 #define is_thread(t) ((t) != NULL && (t)->magic == THREAD_MAGIC)
@@ -72,6 +73,81 @@ static tid_t allocate_tid (void);
  * always at the beginning of a page and the stack pointer is
  * somewhere in the middle, this locates the curent thread. */
 #define running_thread() ((struct thread *) (pg_round_down (rrsp ())))
+
+void cmp_nowNfirst(void)
+{
+	if(list_empty(&ready_list))
+	return;
+
+	struct thread *t = list_entry(list_front(&ready_list), struct thread, elem);
+
+	if(thread_get_priority() < t->priority)
+	{
+		thread_yield();
+	}
+}
+
+bool cmp_priority(const struct list_elem *a, const struct list_elem *b, void *aux UNUSED)
+{
+	struct thread *thread_a = list_entry(a, struct thread, elem);
+	struct thread *thread_b = list_entry(b, struct thread, elem);
+
+	if(thread_a == NULL || thread_b == NULL)
+	{
+		return false;
+	}
+
+	return thread_a->priority > thread_b->priority;
+}
+
+void donation_priority(void)
+{
+	struct thread *t = thread_current();
+	int priority = t->priority;
+	int depth = 0;
+
+	for(int depth = 0; depth < 8; depth++)
+	{
+		if(t->wait_on_lock == NULL)
+		{
+			break;
+		}
+		t = t->wait_on_lock->holder;
+		t->priority = priority;
+	}
+}
+
+void remove_with_lock(struct lock *lock){
+	struct thread *t = thread_current();
+    struct list_elem *curr = list_begin(&t->donations);
+    struct thread *curr_thread = NULL;
+ 
+	while (curr != list_end(&t->donations)) 
+	{
+        curr_thread = list_entry(curr, struct thread, donations_elem);
+ 
+        if (curr_thread->wait_on_lock == lock)
+            list_remove(&curr_thread->donations_elem);
+ 
+        curr = list_next(curr);
+    }
+}
+
+void refresh_priority(void){
+	struct thread *t = thread_current();
+    t->priority = t->init_priority;
+ 
+    if (list_empty(&t->donations))
+        return;
+ 
+    list_sort(&t->donations, cmp_priority, NULL);
+ 
+    struct list_elem *max_elem = list_front(&t->donations);
+    struct thread *max_thread = list_entry(max_elem, struct thread, donations_elem);
+ 
+    if (t->priority < max_thread->priority)
+        t->priority = max_thread->priority;
+}
 
 
 // Global descriptor table for the thread_start.
@@ -189,10 +265,41 @@ thread_create (const char *name, int priority,
 	t = palloc_get_page (PAL_ZERO);
 	if (t == NULL)
 		return TID_ERROR;
+	struct thread *cur = thread_current();
 
 	/* Initialize thread. */
 	init_thread (t, name, priority);
 	tid = t->tid = allocate_tid ();
+
+	
+	#ifdef USERPROG
+	/* 파일 디스크립터 초기화 */
+	list_init(&t->fd_list);
+	t->last_created_fd = 3;
+
+	for(int i = 0; i < 3; i++)
+	{
+		struct file_descriptor *fd_entry = malloc(sizeof(struct file_descriptor));
+		if(fd_entry == NULL)
+		{
+			while(!list_empty(&t->fd_list))
+			{
+				struct list_elem *e = list_pop_front(&t->fd_list);
+				struct file_descriptor *cleanup_fd = list_entry(e, struct file_descriptor, fd_elem);
+				free(cleanup_fd);
+			}
+			palloc_free_page(t);
+			return TID_ERROR;
+		}
+
+		fd_entry->fd = i;
+		fd_entry->file_p = NULL;
+		list_push_back(&t->fd_list, &fd_entry->fd_elem);
+	}
+	t->exit_status = 0;
+	list_push_back(&cur->child_list,&t->child_list);
+
+	#endif
 
 	/* Call the kernel_thread if it scheduled.
 	 * Note) rdi is 1st argument, and rsi is 2nd argument. */
@@ -221,6 +328,9 @@ thread_create (const char *name, int priority,
 
 	/* Add to run queue. */
 	thread_unblock (t);
+
+	if(t->priority > thread_current()->priority);
+	thread_yield();
 
 	return tid;
 }
@@ -255,7 +365,7 @@ thread_unblock (struct thread *t) {
 
 	old_level = intr_disable ();
 	ASSERT (t->status == THREAD_BLOCKED);
-	list_push_back (&ready_list, &t->elem);
+	list_insert_ordered (&ready_list, &t->elem, cmp_priority, NULL);
 	t->status = THREAD_READY;
 	intr_set_level (old_level);
 }
@@ -327,6 +437,12 @@ thread_yield (void) {
 void
 thread_set_priority (int new_priority) {
 	thread_current ()->priority = new_priority;
+
+	thread_current()->init_priority = new_priority;
+
+	refresh_priority();
+
+	cmp_nowNfirst();
 }
 
 /* Returns the current thread's priority. */
@@ -422,17 +538,21 @@ init_thread (struct thread *t, const char *name, int priority) {
 	t->status = THREAD_BLOCKED;
 	strlcpy (t->name, name, sizeof t->name);
 	t->tf.rsp = (uint64_t) t + PGSIZE - sizeof (void *);
-	t->priority = priority;
+	t->priority = t->init_priority = priority;
 	t->magic = THREAD_MAGIC;
 
+	list_init(&t->donations);
+	t->wait_on_lock = NULL;
+
+#ifdef USERPROG
 	t->exit_status = 0;
 	t->running = NULL;
-
 	sema_init(&t->wait_sema, 0);
 	sema_init(&t->fork_sema, 0);
 	sema_init(&t->free_sema, 0);
 
 	list_init(&t->child_list);
+#endif
 }
 
 /* Chooses and returns the next thread to be scheduled.  Should
